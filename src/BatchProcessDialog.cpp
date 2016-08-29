@@ -15,6 +15,7 @@
 *//*******************************************************************/
 
 #include "Audacity.h"
+#include "BatchProcessDialog.h"
 
 #include <wx/defs.h>
 #include <wx/checkbox.h>
@@ -32,15 +33,16 @@
 #include <wx/msgdlg.h>
 #include <wx/settings.h>
 
+#include "ShuttleGui.h"
 #include "Prefs.h"
 #include "Project.h"
-#include "BatchProcessDialog.h"
 #include "Internat.h"
 #include "commands/CommandManager.h"
 #include "effects/Effect.h"
 #include "../images/Arrow.xpm"
 #include "../images/Empty9x16.xpm"
 #include "BatchCommands.h"
+#include "Track.h"
 #include "UndoManager.h"
 
 #include "Theme.h"
@@ -54,14 +56,14 @@
 #define ApplyToProjectID   7003
 #define ApplyToFilesID     7004
 
-BEGIN_EVENT_TABLE(BatchProcessDialog, wxDialog)
+BEGIN_EVENT_TABLE(BatchProcessDialog, wxDialogWrapper)
    EVT_BUTTON(ApplyToProjectID, BatchProcessDialog::OnApplyToProject)
    EVT_BUTTON(ApplyToFilesID, BatchProcessDialog::OnApplyToFiles)
    EVT_BUTTON(wxID_CANCEL, BatchProcessDialog::OnCancel)
 END_EVENT_TABLE()
 
 BatchProcessDialog::BatchProcessDialog(wxWindow * parent):
-   wxDialog(parent, wxID_ANY, _("Apply Chain"),
+   wxDialogWrapper(parent, wxID_ANY, _("Apply Chain"),
             wxDefaultPosition, wxDefaultSize,
             wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
 {
@@ -151,8 +153,9 @@ void BatchProcessDialog::OnApplyToProject(wxCommandEvent & WXUNUSED(event))
    }
    wxString name = mChains->GetItemText(item);
 
-   wxDialog d(this, wxID_ANY, GetTitle());
-   ShuttleGui S(&d, eIsCreating);
+   wxDialog * pD = safenew wxDialogWrapper(this, wxID_ANY, GetTitle());
+   pD->SetName(pD->GetTitle());
+   ShuttleGui S(pD, eIsCreating);
 
    S.StartHorizontalLay(wxCENTER, false);
    {
@@ -166,22 +169,50 @@ void BatchProcessDialog::OnApplyToProject(wxCommandEvent & WXUNUSED(event))
    }
    S.EndHorizontalLay();
 
-   d.Layout();
-   d.Fit();
-   d.CenterOnScreen();
-   d.Move(-1, 0);
-   d.Show();
-   Hide();
+   pD->Layout();
+   pD->Fit();
+   pD->CenterOnScreen();
+   pD->Move(-1, 0);
+   pD->Show();
 
-   wxWindowDisabler wd;
+   // The Hide() on the next line seems to tickle a bug in wx3,
+   // giving rise to our Bug #1221.  The problem is that on Linux 
+   // the 'Hide' converts us from a Modal into a regular dialog,
+   // as far as closing is concerned.  On Linux we can't close with
+   // EndModal() anymore after this.
+   Hide();
 
    gPrefs->Write(wxT("/Batch/ActiveChain"), name);
    gPrefs->Flush();
 
    mBatchCommands.ReadChain(name);
-   if (!mBatchCommands.ApplyChain()) {
+
+   // The disabler must get deleted before the EndModal() call.  Otherwise,
+   // the menus on OSX will remain disabled.
+   bool success;
+   {
+      wxWindowDisabler wd(pD);
+      success = mBatchCommands.ApplyChain();
+   }
+
+   if (!success) {
+      Show();
       return;
    }
+
+#if !defined(__WXMAC__)
+   // Under Linux an EndModal() here crashes (Bug #1221).
+   // But sending a close message instead is OK.
+   wxCloseEvent Evt;
+   Evt.SetId( wxID_OK );
+   Evt.SetEventObject( this);
+   ProcessWindowEvent( Evt );
+#else
+   EndModal(wxID_OK);
+#endif
+
+   // Raise myself again, and the parent window with me
+   Show();
 }
 
 void BatchProcessDialog::OnApplyToFiles(wxCommandEvent & WXUNUSED(event))
@@ -211,10 +242,9 @@ void BatchProcessDialog::OnApplyToFiles(wxCommandEvent & WXUNUSED(event))
    wxString filter;
    wxString all;
 
-   l.DeleteContents(true);
    Importer::Get().GetSupportedImportFormats(&l);
-   for (FormatList::compatibility_iterator n = l.GetFirst(); n; n = n->GetNext()) {
-      Format *f = n->GetData();
+   for (const auto &format : l) {
+      const Format *f = &format;
 
       wxString newfilter = f->formatName + wxT("|");
       for (size_t i = 0; i < f->formatExtensions.size(); i++) {
@@ -264,21 +294,23 @@ void BatchProcessDialog::OnApplyToFiles(wxCommandEvent & WXUNUSED(event))
 
    files.Sort();
 
-   wxDialog d(this, wxID_ANY, GetTitle());
-   ShuttleGui S(&d, eIsCreating);
+   wxDialog * pD = safenew wxDialogWrapper(this, wxID_ANY, GetTitle());
+   pD->SetName(pD->GetTitle());
+   ShuttleGui S(pD, eIsCreating);
 
    S.StartVerticalLay(false);
    {
       S.StartStatic(_("Applying..."), 1);
       {
-         wxImageList *imageList = new wxImageList(9, 16);
+         auto imageList = std::make_unique<wxImageList>(9, 16);
          imageList->Add(wxIcon(empty9x16_xpm));
          imageList->Add(wxIcon(arrow_xpm));
 
          S.SetStyle(wxSUNKEN_BORDER | wxLC_REPORT | wxLC_HRULES | wxLC_VRULES |
                     wxLC_SINGLE_SEL);
          mList = S.Id(CommandsListID).AddListControlReportMode();
-         mList->AssignImageList(imageList, wxIMAGE_LIST_SMALL);
+         // AssignImageList takes ownership
+         mList->AssignImageList(imageList.release(), wxIMAGE_LIST_SMALL);
          mList->InsertColumn(0, _("File"), wxLIST_FORMAT_LEFT);
       }
       S.EndStatic();
@@ -306,17 +338,17 @@ void BatchProcessDialog::OnApplyToFiles(wxCommandEvent & WXUNUSED(event))
       mList->SetInitialSize(sz);
    }
 
-   d.Layout();
-   d.Fit();
-   d.SetSizeHints(d.GetSize());
-   d.CenterOnScreen();
-   d.Move(-1, 0);
-   d.Show();
+   pD->Layout();
+   pD->Fit();
+   pD->SetSizeHints(pD->GetSize());
+   pD->CenterOnScreen();
+   pD->Move(-1, 0);
+   pD->Show();
    Hide();
 
    mBatchCommands.ReadChain(name);
    for (i = 0; i < (int)files.GetCount(); i++) {
-      wxWindowDisabler wd(&d);
+      wxWindowDisabler wd(pD);
       if (i > 0) {
          //Clear the arrow in previous item.
          mList->SetItemImage(i - 1, 0, 0);
@@ -324,25 +356,53 @@ void BatchProcessDialog::OnApplyToFiles(wxCommandEvent & WXUNUSED(event))
       mList->SetItemImage(i, 1, 1);
       mList->EnsureVisible(i);
 
-      project->OnRemoveTracks();
       project->Import(files[i]);
       project->OnSelectAll();
       if (!mBatchCommands.ApplyChain()) {
          break;
       }
 
-      if (!d.IsShown() || mAbort) {
+      if (!pD->IsShown() || mAbort) {
          break;
       }
       UndoManager *um = project->GetUndoManager();
       um->ClearStates();
+      project->OnSelectAll();
+      project->OnRemoveTracks();
    }
    project->OnRemoveTracks();
+
+   // Under Linux an EndModal() here crashes (Bug #1221).
+   // But sending a close message instead is OK.
+#if !defined(__WXMAC__)
+   wxCloseEvent Evt;
+   Evt.SetId( wxID_OK );
+   Evt.SetEventObject( this);
+   ProcessWindowEvent( Evt );
+#else
+   EndModal(wxID_OK);
+#endif 
+
+   // Raise myself again, and the parent window with me
+   Show();
 }
 
 void BatchProcessDialog::OnCancel(wxCommandEvent & WXUNUSED(event))
 {
-   EndModal(false);
+#if !defined(__WXMAC__)
+   // It is possible that we could just do EndModal()
+   // here even on Linux.  However, we know the alternative way of
+   // closing works, if we are hidden, so we hide and then do that.
+   Hide();
+   // Under Linux an EndModal() here potentially crashes (Bug #1221).
+   // But sending a close message instead is OK.
+   wxCloseEvent Evt;
+   Evt.SetId( wxID_CANCEL );
+   Evt.SetEventObject( this);
+   ProcessWindowEvent( Evt );
+#else
+   EndModal(wxID_CANCEL);
+#endif
 }
 
 /////////////////////////////////////////////////////////////////////
@@ -364,7 +424,7 @@ enum {
    RenameButtonID
 };
 
-BEGIN_EVENT_TABLE(EditChainsDialog, wxDialog)
+BEGIN_EVENT_TABLE(EditChainsDialog, wxDialogWrapper)
    EVT_LIST_ITEM_SELECTED(ChainsListID, EditChainsDialog::OnChainSelected)
    EVT_LIST_ITEM_SELECTED(CommandsListID, EditChainsDialog::OnListSelected)
    EVT_LIST_BEGIN_LABEL_EDIT(ChainsListID, EditChainsDialog::OnChainsBeginEdit)
@@ -396,7 +456,7 @@ enum {
 
 /// Constructor
 EditChainsDialog::EditChainsDialog(wxWindow * parent):
-   wxDialog(parent, wxID_ANY, _("Edit Chains"),
+   wxDialogWrapper(parent, wxID_ANY, _("Edit Chains"),
             wxDefaultPosition, wxDefaultSize,
             wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
 {
@@ -710,7 +770,8 @@ void EditChainsDialog::OnAdd(wxCommandEvent & WXUNUSED(event))
    while (true) {
       wxTextEntryDialog d(this,
                           _("Enter name of new chain"),
-                          GetTitle());
+                          _("Name of new chain"));
+      d.SetName(d.GetTitle());
       wxString name;
 
       if (d.ShowModal() == wxID_CANCEL) {

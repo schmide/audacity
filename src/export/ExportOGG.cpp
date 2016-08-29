@@ -19,90 +19,94 @@
 
 #ifdef USE_LIBVORBIS
 
-#include "Export.h"
 #include "ExportOGG.h"
+#include "Export.h"
 
 #include <wx/log.h>
 #include <wx/msgdlg.h>
-
+#include <wx/slider.h>
+ 
 #include <vorbis/vorbisenc.h>
 
 #include "../FileIO.h"
 #include "../Project.h"
 #include "../Mix.h"
 #include "../Prefs.h"
+#include "../ShuttleGui.h"
 
 #include "../Internat.h"
 #include "../Tags.h"
+#include "../Track.h"
 
 //----------------------------------------------------------------------------
 // ExportOGGOptions
 //----------------------------------------------------------------------------
 
-class ExportOGGOptions : public wxDialog
+class ExportOGGOptions final : public wxPanelWrapper
 {
 public:
 
    ExportOGGOptions(wxWindow *parent, int format);
+   virtual ~ExportOGGOptions();
+
    void PopulateOrExchange(ShuttleGui & S);
-   void OnOK(wxCommandEvent& event);
+   bool TransferDataToWindow();
+   bool TransferDataFromWindow();
 
 private:
 
    int mOggQualityUnscaled;
-
-   DECLARE_EVENT_TABLE()
 };
-
-BEGIN_EVENT_TABLE(ExportOGGOptions, wxDialog)
-   EVT_BUTTON(wxID_OK, ExportOGGOptions::OnOK)
-END_EVENT_TABLE()
 
 ///
 ///
 ExportOGGOptions::ExportOGGOptions(wxWindow *parent, int WXUNUSED(format))
-:  wxDialog(parent, wxID_ANY,
-            wxString(_("Specify Ogg Vorbis Options")))
+:  wxPanelWrapper(parent, wxID_ANY)
 {
-   ShuttleGui S(this, eIsCreatingFromPrefs);
-
    mOggQualityUnscaled = gPrefs->Read(wxT("/FileFormats/OggExportQuality"),50)/10;
 
+   ShuttleGui S(this, eIsCreatingFromPrefs);
    PopulateOrExchange(S);
+
+   TransferDataToWindow();
+}
+
+ExportOGGOptions::~ExportOGGOptions()
+{
+   TransferDataFromWindow();
 }
 
 ///
 ///
 void ExportOGGOptions::PopulateOrExchange(ShuttleGui & S)
 {
-   S.StartHorizontalLay(wxEXPAND, 0);
+   S.StartVerticalLay();
    {
-      S.StartStatic(_("Ogg Vorbis Export Setup"), 1);
+      S.StartHorizontalLay(wxEXPAND);
       {
-         S.StartMultiColumn(2, wxEXPAND);
+         S.SetSizerProportion(1);
+         S.StartMultiColumn(2, wxCENTER);
          {
             S.SetStretchyCol(1);
-            S.TieSlider(_("Quality:"), mOggQualityUnscaled, 10);
+            S.Prop(1).TieSlider(_("Quality:"), mOggQualityUnscaled, 10);
          }
          S.EndMultiColumn();
       }
-      S.EndStatic();
+      S.EndHorizontalLay();
    }
-   S.EndHorizontalLay();
-
-   S.AddStandardButtons();
-
-   Layout();
-   Fit();
-   SetMinSize(GetSize());
-   Center();
-
-   return;
+   S.EndVerticalLay();
 }
 
 ///
 ///
-void ExportOGGOptions::OnOK(wxCommandEvent& WXUNUSED(event))
+bool ExportOGGOptions::TransferDataToWindow()
+{
+   return true;
+}
+
+///
+///
+bool ExportOGGOptions::TransferDataFromWindow()
 {
    ShuttleGui S(this, eIsSavingToPrefs);
    PopulateOrExchange(S);
@@ -110,9 +114,7 @@ void ExportOGGOptions::OnOK(wxCommandEvent& WXUNUSED(event))
    gPrefs->Write(wxT("/FileFormats/OggExportQuality"),mOggQualityUnscaled * 10);
    gPrefs->Flush();
 
-   EndModal(wxID_OK);
-
-   return;
+   return true;
 }
 
 //----------------------------------------------------------------------------
@@ -121,29 +123,28 @@ void ExportOGGOptions::OnOK(wxCommandEvent& WXUNUSED(event))
 
 #define SAMPLES_PER_RUN 8192
 
-class ExportOGG : public ExportPlugin
+class ExportOGG final : public ExportPlugin
 {
 public:
 
    ExportOGG();
-   void Destroy();
 
    // Required
+   wxWindow *OptionsCreate(wxWindow *parent, int format) override;
 
-   bool DisplayOptions(wxWindow *parent, int format = 0);
    int Export(AudacityProject *project,
                int channels,
-               wxString fName,
+               const wxString &fName,
                bool selectedOnly,
                double t0,
                double t1,
                MixerSpec *mixerSpec = NULL,
-               Tags *metadata = NULL,
-               int subformat = 0);
+               const Tags *metadata = NULL,
+               int subformat = 0) override;
 
 private:
 
-   bool FillComment(AudacityProject *project, vorbis_comment *comment, Tags *metadata);
+   bool FillComment(AudacityProject *project, vorbis_comment *comment, const Tags *metadata);
 };
 
 ExportOGG::ExportOGG()
@@ -157,23 +158,18 @@ ExportOGG::ExportOGG()
    SetDescription(_("Ogg Vorbis Files"),0);
 }
 
-void ExportOGG::Destroy()
-{
-   delete this;
-}
-
 int ExportOGG::Export(AudacityProject *project,
                        int numChannels,
-                       wxString fName,
+                       const wxString &fName,
                        bool selectionOnly,
                        double t0,
                        double t1,
                        MixerSpec *mixerSpec,
-                       Tags *metadata,
+                       const Tags *metadata,
                        int WXUNUSED(subformat))
 {
    double    rate    = project->GetRate();
-   TrackList *tracks = project->GetTracks();
+   const TrackList *tracks = project->GetTracks();
    double    quality = (gPrefs->Read(wxT("/FileFormats/OggExportQuality"), 50)/(float)100.0);
 
    wxLogNull logNo;            // temporarily disable wxWidgets error messages
@@ -237,89 +233,85 @@ int ExportOGG::Export(AudacityProject *project,
    ogg_stream_packetin(&stream, &codebook_header);
 
    // Flushing these headers now guarentees that audio data will
-   // start on a new page, which apparently makes streaming easier
+   // start on a NEW page, which apparently makes streaming easier
    while (ogg_stream_flush(&stream, &page)) {
       outFile.Write(page.header, page.header_len);
       outFile.Write(page.body, page.body_len);
    }
 
-   int numWaveTracks;
-   WaveTrack **waveTracks;
-   tracks->GetWaveTracks(selectionOnly, &numWaveTracks, &waveTracks);
-   Mixer *mixer = CreateMixer(numWaveTracks, waveTracks,
-                            tracks->GetTimeTrack(),
-                            t0, t1,
-                            numChannels, SAMPLES_PER_RUN, false,
-                            rate, floatSample, true, mixerSpec);
-   delete [] waveTracks;
+   const WaveTrackConstArray waveTracks =
+      tracks->GetWaveTrackConstArray(selectionOnly, false);
+   {
+      auto mixer = CreateMixer(waveTracks,
+         tracks->GetTimeTrack(),
+         t0, t1,
+         numChannels, SAMPLES_PER_RUN, false,
+         rate, floatSample, true, mixerSpec);
 
-   ProgressDialog *progress = new ProgressDialog(wxFileName(fName).GetName(),
-      selectionOnly ?
-      _("Exporting the selected audio as Ogg Vorbis") :
-      _("Exporting the entire project as Ogg Vorbis"));
+      ProgressDialog progress(wxFileName(fName).GetName(),
+         selectionOnly ?
+         _("Exporting the selected audio as Ogg Vorbis") :
+         _("Exporting the entire project as Ogg Vorbis"));
 
-   while (updateResult == eProgressSuccess && !eos) {
-      float **vorbis_buffer = vorbis_analysis_buffer(&dsp, SAMPLES_PER_RUN);
-      sampleCount samplesThisRun = mixer->Process(SAMPLES_PER_RUN);
+      while (updateResult == eProgressSuccess && !eos) {
+         float **vorbis_buffer = vorbis_analysis_buffer(&dsp, SAMPLES_PER_RUN);
+         auto samplesThisRun = mixer->Process(SAMPLES_PER_RUN);
 
-      if (samplesThisRun == 0) {
-         // Tell the library that we wrote 0 bytes - signalling the end.
-         vorbis_analysis_wrote(&dsp, 0);
-      }
-      else {
+         if (samplesThisRun == 0) {
+            // Tell the library that we wrote 0 bytes - signalling the end.
+            vorbis_analysis_wrote(&dsp, 0);
+         }
+         else {
 
-         for (int i = 0; i < numChannels; i++) {
-            float *temp = (float *)mixer->GetBuffer(i);
-            memcpy(vorbis_buffer[i], temp, sizeof(float)*SAMPLES_PER_RUN);
+            for (int i = 0; i < numChannels; i++) {
+               float *temp = (float *)mixer->GetBuffer(i);
+               memcpy(vorbis_buffer[i], temp, sizeof(float)*SAMPLES_PER_RUN);
+            }
+
+            // tell the encoder how many samples we have
+            vorbis_analysis_wrote(&dsp, samplesThisRun);
          }
 
-         // tell the encoder how many samples we have
-         vorbis_analysis_wrote(&dsp, samplesThisRun);
-      }
+         // I don't understand what this call does, so here is the comment
+         // from the example, verbatim:
+         //
+         //    vorbis does some data preanalysis, then divvies up blocks
+         //    for more involved (potentially parallel) processing. Get
+         //    a single block for encoding now
+         while (vorbis_analysis_blockout(&dsp, &block) == 1) {
 
-      // I don't understand what this call does, so here is the comment
-      // from the example, verbatim:
-      //
-      //    vorbis does some data preanalysis, then divvies up blocks
-      //    for more involved (potentially parallel) processing. Get
-      //    a single block for encoding now
-      while (vorbis_analysis_blockout(&dsp, &block) == 1) {
+            // analysis, assume we want to use bitrate management
+            vorbis_analysis(&block, NULL);
+            vorbis_bitrate_addblock(&block);
 
-         // analysis, assume we want to use bitrate management
-         vorbis_analysis(&block, NULL);
-         vorbis_bitrate_addblock(&block);
+            while (vorbis_bitrate_flushpacket(&dsp, &packet)) {
 
-         while (vorbis_bitrate_flushpacket(&dsp, &packet)) {
+               // add the packet to the bitstream
+               ogg_stream_packetin(&stream, &packet);
 
-            // add the packet to the bitstream
-            ogg_stream_packetin(&stream, &packet);
+               // From vorbis-tools-1.0/oggenc/encode.c:
+               //   If we've gone over a page boundary, we can do actual output,
+               //   so do so (for however many pages are available).
 
-            // From vorbis-tools-1.0/oggenc/encode.c:
-            //   If we've gone over a page boundary, we can do actual output,
-            //   so do so (for however many pages are available).
+               while (!eos) {
+                  int result = ogg_stream_pageout(&stream, &page);
+                  if (!result) {
+                     break;
+                  }
 
-            while (!eos) {
-               int result = ogg_stream_pageout(&stream, &page);
-               if (!result) {
-                  break;
-               }
+                  outFile.Write(page.header, page.header_len);
+                  outFile.Write(page.body, page.body_len);
 
-               outFile.Write(page.header, page.header_len);
-               outFile.Write(page.body, page.body_len);
-
-               if (ogg_page_eos(&page)) {
-                  eos = 1;
+                  if (ogg_page_eos(&page)) {
+                     eos = 1;
+                  }
                }
             }
          }
+
+         updateResult = progress.Update(mixer->MixGetCurrentTime() - t0, t1 - t0);
       }
-
-      updateResult = progress->Update(mixer->MixGetCurrentTime()-t0, t1-t0);
    }
-
-   delete progress;;
-
-   delete mixer;
 
    ogg_stream_clear(&stream);
 
@@ -333,16 +325,13 @@ int ExportOGG::Export(AudacityProject *project,
    return updateResult;
 }
 
-bool ExportOGG::DisplayOptions(wxWindow *parent, int format)
+wxWindow *ExportOGG::OptionsCreate(wxWindow *parent, int format)
 {
-   ExportOGGOptions od(parent, format);
-
-   od.ShowModal();
-
-   return true;
+   wxASSERT(parent); // to justify safenew
+   return safenew ExportOGGOptions(parent, format);
 }
 
-bool ExportOGG::FillComment(AudacityProject *project, vorbis_comment *comment, Tags *metadata)
+bool ExportOGG::FillComment(AudacityProject *project, vorbis_comment *comment, const Tags *metadata)
 {
    // Retrieve tags from project if not over-ridden
    if (metadata == NULL)
@@ -350,8 +339,10 @@ bool ExportOGG::FillComment(AudacityProject *project, vorbis_comment *comment, T
 
    vorbis_comment_init(comment);
 
-   wxString n, v;
-   for (bool cont = metadata->GetFirst(n, v); cont; cont = metadata->GetNext(n, v)) {
+   wxString n;
+   for (const auto &pair : metadata->GetRange()) {
+      n = pair.first;
+      const auto &v = pair.second;
       if (n == TAG_YEAR) {
          n = wxT("DATE");
       }
@@ -363,9 +354,9 @@ bool ExportOGG::FillComment(AudacityProject *project, vorbis_comment *comment, T
    return true;
 }
 
-ExportPlugin *New_ExportOGG()
+movable_ptr<ExportPlugin> New_ExportOGG()
 {
-   return new ExportOGG();
+   return make_movable<ExportOGG>();
 }
 
 #endif // USE_LIBVORBIS

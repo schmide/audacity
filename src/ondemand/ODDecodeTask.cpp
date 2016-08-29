@@ -16,11 +16,14 @@ updating the ODPCMAliasBlockFile and the GUI of the newly available data.
 
 *//*******************************************************************/
 
+#include "../Audacity.h"
 #include "ODDecodeTask.h"
 #include "../blockfile/ODDecodeBlockFile.h"
+#include "../Sequence.h"
+#include "../WaveTrack.h"
 #include <wx/wx.h>
 
-///Creates a new task that computes summaries for a wavetrack that needs to be specified through SetWaveTrack()
+///Creates a NEW task that computes summaries for a wavetrack that needs to be specified through SetWaveTrack()
 ODDecodeTask::ODDecodeTask()
 {
    mMaxBlockFiles = 0;
@@ -39,7 +42,6 @@ void ODDecodeTask::DoSomeInternal()
       return;
    }
 
-   ODDecodeBlockFile* bf;
    ODFileDecoder* decoder;
    sampleCount blockStartSample = 0;
    sampleCount blockEndSample = 0;
@@ -47,21 +49,21 @@ void ODDecodeTask::DoSomeInternal()
 
    for(size_t i=0; i < mWaveTracks.size() && mBlockFiles.size();i++)
    {
-      bf = mBlockFiles[0];
+      const auto &bf = mBlockFiles[0];
 
       int ret = 1;
 
       //first check to see if the ref count is at least 2.  It should have one
       //from when we added it to this instance's mBlockFiles array, and one from
       //the Wavetrack/sequence.  If it doesn't it has been deleted and we should forget it.
-      if(bf->RefCount()>=2)
+      if(bf.use_count()>=2)
       {
          //OD TODO: somehow pass the bf a reference to the decoder that manages it's file.
          //we need to ensure that the filename won't change or be moved.  We do this by calling LockRead(),
          //which the dirmanager::EnsureSafeFilename also does.
          bf->LockRead();
          //Get the decoder.  If the file was moved, we need to create another one and init it.
-         decoder=GetOrCreateMatchingFileDecoder(bf);
+         decoder = GetOrCreateMatchingFileDecoder( &*bf );
          if(!decoder->IsInitialized())
             decoder->Init();
          bf->SetODFileDecoder(decoder);
@@ -84,7 +86,6 @@ void ODDecodeTask::DoSomeInternal()
 
       //Release the refcount we placed on it if we are successful
       if(ret >= 0 ) {
-         bf->Deref();
          //take it out of the array - we are done with it.
          mBlockFiles.erase(mBlockFiles.begin());
 
@@ -124,8 +125,7 @@ bool ODDecodeTask::SeekingAllowed()
 ///by default creates the order of the wavetrack to load.
 void ODDecodeTask::Update()
 {
-
-   std::vector<ODDecodeBlockFile*> tempBlocks;
+   std::vector< std::shared_ptr< ODDecodeBlockFile > > tempBlocks;
 
    mWaveTrackMutex.Lock();
 
@@ -133,15 +133,11 @@ void ODDecodeTask::Update()
    {
       if(mWaveTracks[j])
       {
-         WaveClip *clip;
          BlockArray *blocks;
          Sequence *seq;
 
          //gather all the blockfiles that we should process in the wavetrack.
-         WaveClipList::compatibility_iterator node = mWaveTracks[j]->GetClipIterator();
-
-         while(node) {
-            clip = node->GetData();
+         for (const auto &clip : mWaveTracks[j]->GetAllClips()) {
             seq = clip->GetSequence();
             //TODO:this lock is way to big since the whole file is one sequence.  find a way to break it down.
             seq->LockDeleteUpdateMutex();
@@ -152,57 +148,58 @@ void ODDecodeTask::Update()
             int insertCursor;
 
             insertCursor =0;//OD TODO:see if this works, removed from inner loop (bfore was n*n)
-            for(i=0; i<(int)blocks->GetCount(); i++)
+            for (i = 0; i<(int)blocks->size(); i++)
             {
                //since we have more than one ODBlockFile, we will need type flags to cast.
-               if(!blocks->Item(i)->f->IsDataAvailable() && ((ODDecodeBlockFile*)blocks->Item(i)->f)->GetDecodeType()==this->GetODType())
+               SeqBlock &block = (*blocks)[i];
+               const auto &file = block.f;
+               std::shared_ptr<ODDecodeBlockFile> oddbFile;
+               if (!file->IsDataAvailable() &&
+                   (oddbFile =
+                       std::static_pointer_cast<ODDecodeBlockFile>(file))->GetDecodeType() == this->GetODType())
                {
-                  blocks->Item(i)->f->Ref();
-                  ((ODDecodeBlockFile*)blocks->Item(i)->f)->SetStart(blocks->Item(i)->start);
-                  ((ODDecodeBlockFile*)blocks->Item(i)->f)->SetClipOffset((sampleCount)(clip->GetStartTime()*clip->GetRate()));
+                  oddbFile->SetStart(block.start);
+                  oddbFile->SetClipOffset(clip->GetStartTime()*clip->GetRate());
 
                   //these will always be linear within a sequence-lets take advantage of this by keeping a cursor.
                   while(insertCursor<(int)tempBlocks.size()&&
-                     (sampleCount)(tempBlocks[insertCursor]->GetStart()+tempBlocks[insertCursor]->GetClipOffset()) <
-                        (sampleCount)(((ODDecodeBlockFile*)blocks->Item(i)->f)->GetStart()+((ODDecodeBlockFile*)blocks->Item(i)->f)->GetClipOffset()))
+                     tempBlocks[insertCursor]->GetStart() + tempBlocks[insertCursor]->GetClipOffset() <
+                        oddbFile->GetStart() + oddbFile->GetClipOffset())
                      insertCursor++;
 
-                  tempBlocks.insert(tempBlocks.begin()+insertCursor++,(ODDecodeBlockFile*)blocks->Item(i)->f);
+                  tempBlocks.insert(tempBlocks.begin()+insertCursor++, oddbFile);
                }
             }
 
             seq->UnlockDeleteUpdateMutex();
-            node = node->GetNext();
          }
       }
    }
    mWaveTrackMutex.Unlock();
 
-   //get the new order.
+   //get the NEW order.
    OrderBlockFiles(tempBlocks);
 }
 
 
 
 ///Orders the input as either On-Demand or default layered order.
-void ODDecodeTask::OrderBlockFiles(std::vector<ODDecodeBlockFile*> &unorderedBlocks)
+void ODDecodeTask::OrderBlockFiles
+   (std::vector< std::shared_ptr< ODDecodeBlockFile > > &unorderedBlocks)
 {
-   //we are going to take things out of the array.  But first deref them since we ref them when we put them in.
-   for(unsigned int i=0;i<mBlockFiles.size();i++)
-      mBlockFiles[i]->Deref();
    mBlockFiles.clear();
    //TODO:order the blockfiles into our queue in a fancy convenient way.  (this could be user-prefs)
    //for now just put them in linear.  We start the order from the first block that includes the ondemand sample
    //(which the user sets by clicking.)   note that this code is pretty hacky - it assumes that the array is sorted in time.
 
    //find the startpoint
-   sampleCount processStartSample = GetDemandSample();
+   auto processStartSample = GetDemandSample();
    for(int i= ((int)unorderedBlocks.size())-1;i>= 0;i--)
    {
       //check to see if the refcount is at least two before we add it to the list.
       //There should be one Ref() from the one added by this ODTask, and one from the track.
       //If there isn't, then the block was deleted for some reason and we should ignore it.
-      if(unorderedBlocks[i]->RefCount()>=2)
+      if(unorderedBlocks[i].use_count() >= 2)
       {
          //test if the blockfiles are near the task cursor.  we use the last mBlockFiles[0] as our point of reference
          //and add ones that are closer.
@@ -226,8 +223,6 @@ void ODDecodeTask::OrderBlockFiles(std::vector<ODDecodeBlockFile*> &unorderedBlo
       }
       else
       {
-         //Otherwise, let it be deleted and forget about it.
-         unorderedBlocks[i]->Deref();
       }
    }
 
@@ -262,7 +257,7 @@ ODFileDecoder* ODDecodeTask::GetOrCreateMatchingFileDecoder(ODDecodeBlockFile* b
       if(mDecoders[i]->GetFileName()==blockFile->GetAudioFileName().GetFullPath() &&
          GetODType() == blockFile->GetDecodeType() )
       {
-         ret = mDecoders[i];
+         ret = mDecoders[i].get();
          break;
       }
    }
@@ -283,8 +278,8 @@ int ODDecodeTask::GetNumFileDecoders()
 
 ///This should handle unicode converted to UTF-8 on mac/linux, but OD TODO:check on windows
 ODFileDecoder::ODFileDecoder(const wxString & fName)
+   : mFName{ fName }
 {
-   mFName = fName;
    mInited = false;
 }
 

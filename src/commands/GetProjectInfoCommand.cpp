@@ -20,7 +20,6 @@
 #include "../TrackPanel.h"
 #include "../Project.h"
 #include "../Track.h"
-#include "../WaveTrack.h"
 
 wxString GetProjectInfoCommandType::BuildName()
 {
@@ -29,7 +28,7 @@ wxString GetProjectInfoCommandType::BuildName()
 
 void GetProjectInfoCommandType::BuildSignature(CommandSignature &signature)
 {
-   OptionValidator *infoTypeValidator = new OptionValidator();
+   auto infoTypeValidator = make_movable<OptionValidator>();
    infoTypeValidator->AddOption(wxT("Name"));
    infoTypeValidator->AddOption(wxT("NumberOfTracks"));
    infoTypeValidator->AddOption(wxT("SelectedTracks"));
@@ -37,12 +36,12 @@ void GetProjectInfoCommandType::BuildSignature(CommandSignature &signature)
    infoTypeValidator->AddOption(wxT("SoloTracks"));
    infoTypeValidator->AddOption(wxT("FocusedTrackID")); // returns the Track ID number of the track in focus
 
-   signature.AddParameter(wxT("Type"), wxT("Name"), infoTypeValidator);
+   signature.AddParameter(wxT("Type"), wxT("Name"), std::move(infoTypeValidator));
 }
 
-Command *GetProjectInfoCommandType::Create(CommandOutputTarget *target)
+CommandHolder GetProjectInfoCommandType::Create(std::unique_ptr<CommandOutputTarget> &&target)
 {
-   return new GetProjectInfoCommand(*this, target);
+   return std::make_shared<GetProjectInfoCommand>(*this, std::move(target));
 }
 
 
@@ -50,11 +49,11 @@ Command *GetProjectInfoCommandType::Create(CommandOutputTarget *target)
 bool GetProjectInfoCommand::Apply(CommandExecutionContext context)
 {
    wxString mode = GetString(wxT("Type"));
-   TrackList *projTracks = context.proj->GetTracks();
+   TrackList *projTracks = context.GetProject()->GetTracks();
 
    if (mode.IsSameAs(wxT("Name")))
    {
-      Status(context.proj->GetFileName());
+      Status(context.GetProject()->GetFileName());
    }
    else if (mode.IsSameAs(wxT("FocusedTrackID")))
    {
@@ -94,7 +93,7 @@ int GetProjectInfoCommand::SendNumberOfTracks(CommandExecutionContext context)
 {
    int returnVal=0;
 
-   TrackListIterator iter(context.proj->GetTracks());
+   TrackListIterator iter(context.GetProject()->GetTracks());
    Track *t = iter.First();
    while (t)
    {
@@ -111,10 +110,10 @@ int GetProjectInfoCommand::SendFocusedTrackIndex(CommandExecutionContext context
 {
    int returnVal=0;
    int focusTrackIndex=0;
-   TrackPanel *panel = context.proj->GetTrackPanel();
+   TrackPanel *panel = context.GetProject()->GetTrackPanel();
    Track* focusedTrack = panel->GetFocusedTrack();
 
-   TrackListIterator iter(context.proj->GetTracks());
+   TrackListIterator iter(context.GetProject()->GetTracks());
    Track *t = iter.First();
    while (t)
    {
@@ -148,4 +147,24 @@ void GetProjectInfoCommand::SendTracksInfo(TrackList *projTracks,
       trk = iter.Next();
    }
    Status(boolValueStr);
+}
+
+bool GetProjectInfoCommand::testSelected(Track * track) const
+{
+   return track->GetSelected();
+}
+
+bool GetProjectInfoCommand::testLinked(Track * track) const
+{
+   return track->GetLinked();
+}
+
+bool GetProjectInfoCommand::testSolo(Track * track) const
+{
+   return track->GetSolo();
+}
+
+bool GetProjectInfoCommand::testMute(Track * track) const
+{
+   return track->GetMute();
 }

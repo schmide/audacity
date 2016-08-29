@@ -60,6 +60,7 @@ footer_text = ''
 counter = 0
 errors = 0
 conn = None
+headers = {"User-Agent": "mw2html.py/Audacity"}
 domain = ''
 
 MONOBOOK_SKIN = 'monobook'    # Constant identifier for Monobook.
@@ -342,11 +343,13 @@ def html_remove_image_history(doc):
 def html_remove_translation_links(doc):
     """
     Remove translation links (the international flags).
-    We identify them by the pattern for a 2 letter language code, /[\s\S][\s\S][/"]
+    We identify them by the pattern for a 2 or 3 letter language code, /[a-z]{2,3}[/"]
     in the URL.
+    The second version deals with links like /pt_PT and /zh_CN
+    We are case sensitive, so as not to treat FAQ as a language code.
     """
-    doc = re.sub(r'<a href="[^"]+/[\s\S][\s\S][/"][\s\S]+?</a>', r'<!--Removed Translation Flag-->', doc)
-    doc = re.sub(r'<a href="[^"]+/[\s\S][\s\S]_[\s\S][\s\S][/"][\s\S]+?</a>', r'<!--Removed Translation Flag2-->', doc)
+    doc = re.sub(r'<a href="[^"]+/[a-z]{2,3}[/"][\s\S]+?</a>', r'<!--Removed Translation Flag-->', doc)
+    doc = re.sub(r'<a href="[^"]+/[a-z]{2}_[A-Z]{2}[/"][\s\S]+?</a>', r'<!--Removed Translation Flag2-->', doc)
     return doc
 
 def monobook_hack_skin_html(doc):
@@ -517,7 +520,7 @@ def split_section(url):
 
 def url_open(url):
     # download a file and retrieve its content and mimetype
-    global conn, domain, counter, redir_cache, errors
+    global conn, domain, counter, redir_cache, errors, headers
 
     l_redir = []
     redirect = url
@@ -527,6 +530,7 @@ def url_open(url):
         L = urlparse.urlparse(url)
         if L[1] != domain:
             conn.close()
+            if L[1] == '': return(['',''])
             print "connection to", domain, "closed."
             conn = httplib.HTTPConnection(L[1])
             domain = L[1]
@@ -547,7 +551,7 @@ def url_open(url):
             #increment httplib requests counter
             counter += 1
             try:
-                conn.request("GET", rel_url)
+                conn.request("GET", rel_url,headers=headers)
                 r = conn.getresponse()
                 print 'Status', r.status, r.reason, 'accessing', rel_url
                 if r.status == 404:
@@ -795,7 +799,8 @@ def should_follow(url):
     nurl = normalize_url(url)
     droot = get_domain(config.rooturl)
     dn = get_domain(nurl)
-    if droot != dn and not (dn.endswith(droot) or droot.endswith(dn)):
+    #if droot != dn and not (dn.endswith(droot) or droot.endswith(dn)):
+    if droot != dn:
         if config.debug:
             print url, 'not in the same domain'
         return False
@@ -898,7 +903,7 @@ def run(out=sys.stdout):
     """
     Code interface.
     """
-    global conn, domain, counter, redir_cache, config
+    global conn, domain, counter, redir_cache, config, headers
 
     if urlparse.urlparse(config.rooturl)[1].lower().endswith('wikipedia.org'):
         out.write('Please do not use robots with the Wikipedia site.\n')

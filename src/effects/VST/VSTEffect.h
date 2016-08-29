@@ -18,7 +18,7 @@
 
 #include "../../widgets/NumericTextCtrl.h"
 
-#include "aeffectx.h"
+#include "VSTControl.h"
 
 #define VSTCMDKEY wxT("-checkvst")
 #define VSTPLUGINTYPE wxT("VST")
@@ -49,6 +49,11 @@ typedef AEffect *(*vstPluginMain)(audioMasterCallback audioMaster);
 class VSTEffectTimer;
 class VSTEffectDialog;
 class VSTEffect;
+class wxDynamicLibrary;
+
+#if defined(__WXMAC__)
+struct __CFBundle;
+#endif
 
 ///////////////////////////////////////////////////////////////////////////////
 //
@@ -61,10 +66,11 @@ WX_DEFINE_ARRAY_PTR(VSTEffect *, VSTEffectArray);
 DECLARE_LOCAL_EVENT_TYPE(EVT_SIZEWINDOW, -1);
 DECLARE_LOCAL_EVENT_TYPE(EVT_UPDATEDISPLAY, -1);
 
-class VSTEffect : public wxEvtHandler, 
+class VSTEffect final : public wxEvtHandler,
                   public EffectClientInterface,
                   public EffectUIClientInterface,
-                  public XMLTagHandler
+                  public XMLTagHandler,
+                  public VSTEffectLink
 {
  public:
    VSTEffect(const wxString & path, VSTEffect *master = NULL);
@@ -72,83 +78,83 @@ class VSTEffect : public wxEvtHandler,
 
    // IdentInterface implementation
 
-   virtual wxString GetPath();
-   virtual wxString GetSymbol();
-   virtual wxString GetName();
-   virtual wxString GetVendor();
-   virtual wxString GetVersion();
-   virtual wxString GetDescription();
+   wxString GetPath() override;
+   wxString GetSymbol() override;
+   wxString GetName() override;
+   wxString GetVendor() override;
+   wxString GetVersion() override;
+   wxString GetDescription() override;
 
    // EffectIdentInterface implementation
 
-   virtual EffectType GetType();
-   virtual wxString GetFamily();
-   virtual bool IsInteractive();
-   virtual bool IsDefault();
-   virtual bool IsLegacy();
-   virtual bool SupportsRealtime();
-   virtual bool SupportsAutomation();
+   EffectType GetType() override;
+   wxString GetFamily() override;
+   bool IsInteractive() override;
+   bool IsDefault() override;
+   bool IsLegacy() override;
+   bool SupportsRealtime() override;
+   bool SupportsAutomation() override;
 
    // EffectClientInterface implementation
 
-   virtual bool SetHost(EffectHostInterface *host);
+   bool SetHost(EffectHostInterface *host) override;
 
-   virtual int GetAudioInCount();
-   virtual int GetAudioOutCount();
+   int GetAudioInCount() override;
+   int GetAudioOutCount() override;
 
-   virtual int GetMidiInCount();
-   virtual int GetMidiOutCount();
+   int GetMidiInCount() override;
+   int GetMidiOutCount() override;
 
-   virtual sampleCount GetLatency();
-   virtual sampleCount GetTailSize();
+   sampleCount GetLatency() override;
+   sampleCount GetTailSize() override;
 
-   virtual void SetSampleRate(sampleCount rate);
-   virtual sampleCount SetBlockSize(sampleCount maxBlockSize);
+   void SetSampleRate(double rate) override;
+   sampleCount SetBlockSize(sampleCount maxBlockSize) override;
 
-   virtual bool IsReady();
-   virtual bool ProcessInitialize(sampleCount totalLen, ChannelNames chanMap = NULL);
-   virtual bool ProcessFinalize();
-   virtual sampleCount ProcessBlock(float **inBlock, float **outBlock, sampleCount blockLen);
+   bool IsReady() override;
+   bool ProcessInitialize(sampleCount totalLen, ChannelNames chanMap = NULL) override;
+   bool ProcessFinalize() override;
+   sampleCount ProcessBlock(float **inBlock, float **outBlock, sampleCount blockLen) override;
 
-   virtual bool RealtimeInitialize();
-   virtual bool RealtimeAddProcessor(int numChannels, float sampleRate);
-   virtual bool RealtimeFinalize();
-   virtual bool RealtimeSuspend();
-   virtual bool RealtimeResume();
-   virtual bool RealtimeProcessStart();
-   virtual sampleCount RealtimeProcess(int group,
+   bool RealtimeInitialize() override;
+   bool RealtimeAddProcessor(int numChannels, float sampleRate) override;
+   bool RealtimeFinalize() override;
+   bool RealtimeSuspend() override;
+   bool RealtimeResume() override;
+   bool RealtimeProcessStart() override;
+   sampleCount RealtimeProcess(int group,
                                        float **inbuf,
                                        float **outbuf,
-                                       sampleCount numSamples);
-   virtual bool RealtimeProcessEnd();
+                                       sampleCount numSamples) override;
+   bool RealtimeProcessEnd() override;
 
-   virtual bool ShowInterface(wxWindow *parent, bool forceModal = false);
+   bool ShowInterface(wxWindow *parent, bool forceModal = false) override;
 
-   virtual bool GetAutomationParameters(EffectAutomationParameters & parms);
-   virtual bool SetAutomationParameters(EffectAutomationParameters & parms);
+   bool GetAutomationParameters(EffectAutomationParameters & parms) override;
+   bool SetAutomationParameters(EffectAutomationParameters & parms) override;
 
-   virtual bool LoadUserPreset(const wxString & name);
-   virtual bool SaveUserPreset(const wxString & name);
+   bool LoadUserPreset(const wxString & name) override;
+   bool SaveUserPreset(const wxString & name) override;
 
-   virtual wxArrayString GetFactoryPresets();
-   virtual bool LoadFactoryPreset(int id);
-   virtual bool LoadFactoryDefaults();
+   wxArrayString GetFactoryPresets() override;
+   bool LoadFactoryPreset(int id) override;
+   bool LoadFactoryDefaults() override;
 
    // EffectUIClientInterface implementation
 
-   virtual void SetHostUI(EffectUIHostInterface *host);
-   virtual bool PopulateUI(wxWindow *parent);
-   virtual bool IsGraphicalUI();
-   virtual bool ValidateUI();
-   virtual bool HideUI();
-   virtual bool CloseUI();
+   void SetHostUI(EffectUIHostInterface *host) override;
+   bool PopulateUI(wxWindow *parent) override;
+   bool IsGraphicalUI() override;
+   bool ValidateUI() override;
+   bool HideUI() override;
+   bool CloseUI() override;
 
-   virtual bool CanExportPresets();
-   virtual void ExportPresets();
-   virtual void ImportPresets();
+   bool CanExportPresets() override;
+   void ExportPresets() override;
+   void ImportPresets() override;
 
-   virtual bool HasOptions();
-   virtual void ShowOptions();
+   bool HasOptions() override;
+   void ShowOptions() override;
 
    // VSTEffect implementation
 
@@ -174,7 +180,7 @@ private:
 
    // Base64 encoding and decoding
    static wxString b64encode(const void *in, int len);
-   static int b64decode(wxString in, void *out);
+   static int b64decode(const wxString &in, void *out);
 
    // Realtime
    int GetChannelCount();
@@ -182,6 +188,7 @@ private:
 
    // UI
    void OnSlider(wxCommandEvent & evt);
+   void OnSize(wxSizeEvent & evt);
    void OnSizeWindow(wxCommandEvent & evt);
    void OnUpdateDisplay(wxCommandEvent & evt);
 
@@ -208,10 +215,10 @@ private:
    void SaveXML(const wxFileName & fn);
    void SaveFXProgram(wxMemoryBuffer & buf, int index);
 
-   virtual bool HandleXMLTag(const wxChar *tag, const wxChar **attrs);
-   virtual void HandleXMLEndTag(const wxChar *tag);
-   virtual void HandleXMLContent(const wxString & content);
-   virtual XMLTagHandler *HandleXMLChild(const wxChar *tag);
+   bool HandleXMLTag(const wxChar *tag, const wxChar **attrs) override;
+   void HandleXMLEndTag(const wxChar *tag) override;
+   void HandleXMLContent(const wxString & content) override;
+   XMLTagHandler *HandleXMLChild(const wxChar *tag) override;
 
    // Utility methods
 
@@ -242,6 +249,16 @@ private:
    void callSetChunk(bool isPgm, int len, void *buf, VstPatchChunkInfo *info);
 
  private:
+    // Define a manager class for a handle to a module
+#if defined(__WXMSW__)
+   using ModuleHandle = std::unique_ptr<wxDynamicLibrary>;
+#else
+   struct ModuleDeleter {
+      void operator() (void*) const;
+   };
+   using ModuleHandle = std::unique_ptr < char, ModuleDeleter > ;
+#endif
+
    EffectHostInterface *mHost;
    PluginID mID;
    wxString mPath;
@@ -251,22 +268,44 @@ private:
    int mMidiOuts;
    bool mAutomatable;
    float mSampleRate;
-   sampleCount mUserBlockSize;
+   int mUserBlockSize;
    wxString mName;
    wxString mVendor;
    wxString mDescription;
    int mVersion;
    bool mInteractive;
+   int mVstVersion;
 
    static intptr_t mCurrentEffectID;
 
    bool mReady;
 
+   ModuleHandle mModule;
+
 #if defined(__WXMAC__)
-   void *mBundleRef;       // Cheating a little ... type is really CFBundle
-   int mResource;          // Cheating a little ... type is really CFBundle
+   // These members must be ordered after mModule
+
+   struct BundleDeleter {
+      void operator() (void*) const;
+   };
+   using BundleHandle = std::unique_ptr<
+      __CFBundle, BundleDeleter
+   >;
+
+   BundleHandle mBundleRef;
+
+   struct ResourceDeleter {
+      const BundleHandle *mpHandle;
+      ResourceDeleter(const BundleHandle *pHandle = nullptr)
+         : mpHandle(pHandle) {}
+      void operator() (void*) const;
+   };
+   using ResourceHandle = std::unique_ptr<
+      char, ResourceDeleter
+   >;
+   ResourceHandle mResource;
 #endif
-   void *mModule;
+
    AEffect *mAEffect;
 
    VstTimeInfo mTimeInfo;
@@ -274,7 +313,7 @@ private:
    bool mUseLatency;
    int mBufferDelay;
 
-   sampleCount mBlockSize;
+   int mBlockSize;
 
    int mProcessLevel;
    bool mHasPower;
@@ -283,7 +322,7 @@ private:
 
    wxCRIT_SECT_DECLARE_MEMBER(mDispatcherLock);
 
-   VSTEffectTimer *mTimer;
+   std::unique_ptr<VSTEffectTimer> mTimer;
    int mTimerGuard;
 
    // Realtime processing
@@ -301,6 +340,8 @@ private:
    wxSizerItem *mContainer;
    bool mGui;
 
+   VSTControl *mControl;
+
    NumericTextCtrl *mDuration;
    wxStaticText **mNames;
    wxSlider **mSliders;
@@ -312,42 +353,7 @@ private:
    wxString mChunk;
    long mXMLVersion;
    VstPatchChunkInfo mXMLInfo;
-
-#if defined(__WXMAC__)
-   static pascal OSStatus OverlayEventHandler(EventHandlerCallRef handler, EventRef event, void *data);
-   OSStatus OnOverlayEvent(EventHandlerCallRef handler, EventRef event);
-   static pascal OSStatus WindowEventHandler(EventHandlerCallRef handler, EventRef event, void *data);
-   OSStatus OnWindowEvent(EventHandlerCallRef handler, EventRef event);
-   static pascal OSStatus TrackingEventHandler(EventHandlerCallRef handler, EventRef event, void *data);
-   OSStatus OnTrackingEvent(EventRef event);
-
-   WindowRef mOverlayRef;
-   EventHandlerUPP mOverlayEventHandlerUPP;
-   EventHandlerRef mOverlayEventHandlerRef;
-
-   WindowRef mWindowRef;
-   WindowRef mPreviousRef;
-   EventHandlerUPP mWindowEventHandlerUPP;
-   EventHandlerRef mWindowEventHandlerRef;
-
-   EventHandlerUPP mTrackingHandlerUPP;
-   EventHandlerRef mRootTrackingHandlerRef;
-   EventHandlerRef mViewTrackingHandlerRef;
-   EventHandlerRef mSubviewTrackingHandlerRef;
-   EventHandlerRef mOverlayRootTrackingHandlerRef;
-   EventHandlerRef mOverlayViewTrackingHandlerRef;
    
-#elif defined(__WXMSW__)
-
-   HANDLE mHwnd;
-
-#else
-
-   Display *mXdisp;
-   Window mXwin;
-
-#endif
-
    DECLARE_EVENT_TABLE();
 
    friend class VSTEffectsModule;
@@ -359,7 +365,7 @@ private:
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-class VSTEffectsModule : public ModuleInterface
+class VSTEffectsModule final : public ModuleInterface
 {
 public:
    VSTEffectsModule(ModuleManagerInterface *moduleManager, const wxString *path);
@@ -367,26 +373,26 @@ public:
 
    // IdentInterface implementatino
 
-   virtual wxString GetPath();
-   virtual wxString GetSymbol();
-   virtual wxString GetName();
-   virtual wxString GetVendor();
-   virtual wxString GetVersion();
-   virtual wxString GetDescription();
+   wxString GetPath() override;
+   wxString GetSymbol() override;
+   wxString GetName() override;
+   wxString GetVendor() override;
+   wxString GetVersion() override;
+   wxString GetDescription() override;
 
    // ModuleInterface implementation
 
-   virtual bool Initialize();
-   virtual void Terminate();
+   bool Initialize() override;
+   void Terminate() override;
 
-   virtual bool AutoRegisterPlugins(PluginManagerInterface & pm);
-   virtual wxArrayString FindPlugins(PluginManagerInterface & pm);
-   virtual bool RegisterPlugin(PluginManagerInterface & pm, const wxString & path);
+   bool AutoRegisterPlugins(PluginManagerInterface & pm) override;
+   wxArrayString FindPlugins(PluginManagerInterface & pm) override;
+   bool RegisterPlugin(PluginManagerInterface & pm, const wxString & path) override;
 
-   virtual bool IsPluginValid(const wxString & path);
+   bool IsPluginValid(const wxString & path) override;
 
-   virtual IdentInterface *CreateInstance(const wxString & path);
-   virtual void DeleteInstance(IdentInterface *instance);
+   IdentInterface *CreateInstance(const wxString & path) override;
+   void DeleteInstance(IdentInterface *instance) override;
 
    // VSTEffectModule implementation
 

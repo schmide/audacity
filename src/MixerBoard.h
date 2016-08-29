@@ -17,14 +17,13 @@
 #include <wx/bmpbuttn.h>
 #include <wx/hashmap.h>
 #include <wx/image.h>
-#include <wx/panel.h>
 #include <wx/scrolwin.h>
 #include <wx/statbmp.h>
 #include <wx/stattext.h>
 
 #include "widgets/AButton.h"
 #include "widgets/ASlider.h"
-#include "widgets/Meter.h"
+#include "widgets/wxPanelWrapper.h"
 
 // containment hierarchy:
 //    MixerBoardFrame -> MixerBoard -> MixerBoardScrolledWindow -> MixerTrackCluster(s)
@@ -32,12 +31,12 @@
 
 // MixerTrackSlider is a subclass just to override OnMouseEvent,
 // so we can know when adjustment ends, so we can PushState only then.
-class MixerTrackSlider : public ASlider
+class MixerTrackSlider final : public ASlider
 {
 public:
    MixerTrackSlider(wxWindow * parent,
                      wxWindowID id,
-                     wxString name,
+                     const wxString &name,
                      const wxPoint & pos,
                      const wxSize & size,
                      int style = FRAC_SLIDER,
@@ -45,7 +44,7 @@ public:
                      bool canUseShift = true,
                      float stepValue = STEP_CONTINUOUS,
                      int orientation = wxHORIZONTAL);
-   virtual ~MixerTrackSlider() {};
+   virtual ~MixerTrackSlider() {}
 
    void OnMouseEvent(wxMouseEvent & event);
 
@@ -61,6 +60,7 @@ public:
 
 
 class AudacityProject;
+class Meter;
 class MixerBoard;
 #ifdef EXPERIMENTAL_MIDI_OUT
 class Track;
@@ -68,7 +68,7 @@ class NoteTrack;
 #endif
 class WaveTrack;
 
-class MixerTrackCluster : public wxPanel
+class MixerTrackCluster final : public wxPanelWrapper
 {
 public:
    MixerTrackCluster(wxWindow* parent,
@@ -76,7 +76,9 @@ public:
                      WaveTrack* pLeftTrack, WaveTrack* pRightTrack = NULL,
                      const wxPoint& pos = wxDefaultPosition,
                      const wxSize& size = wxDefaultSize);
-   virtual ~MixerTrackCluster() {};
+   virtual ~MixerTrackCluster() {}
+
+   void UpdatePrefs();
 
    void HandleResize(); // For wxSizeEvents, update gain slider and meter.
 
@@ -98,7 +100,7 @@ private:
    wxColour GetTrackColor();
 
    // event handlers
-   void HandleSelect(const bool bShiftDown);
+   void HandleSelect(bool bShiftDown, bool bControlDown);
 
    void OnKeyEvent(wxKeyEvent& event);
    void OnMouseEvent(wxMouseEvent& event);
@@ -154,20 +156,21 @@ WX_DEFINE_ARRAY(MixerTrackCluster*, MixerTrackClusterArray);
 class MusicalInstrument
 {
 public:
-   MusicalInstrument(wxBitmap* pBitmap, const wxString & strXPMfilename);
+   MusicalInstrument(std::unique_ptr<wxBitmap> &&pBitmap, const wxString & strXPMfilename);
    virtual ~MusicalInstrument();
 
-   wxBitmap*      mBitmap;
+   std::unique_ptr<wxBitmap> mBitmap;
    wxArrayString  mKeywords;
 };
-WX_DECLARE_OBJARRAY(MusicalInstrument, MusicalInstrumentArray);
+
+using MusicalInstrumentArray = std::vector<movable_ptr<MusicalInstrument>>;
 
 
 
 // wxScrolledWindow ignores mouse clicks in client area,
 // but they don't get passed to Mixerboard.
 // We need to catch them to deselect all track clusters.
-class MixerBoardScrolledWindow : public wxScrolledWindow
+class MixerBoardScrolledWindow final : public wxScrolledWindow
 {
 public:
    MixerBoardScrolledWindow(AudacityProject* project,
@@ -192,7 +195,7 @@ public:
 class MixerBoardFrame;
 class TrackList;
 
-class MixerBoard : public wxWindow
+class MixerBoard final : public wxWindow
 {
    friend class MixerBoardFrame;
 
@@ -202,6 +205,8 @@ public:
                const wxPoint& pos = wxDefaultPosition,
                const wxSize& size = wxDefaultSize);
    virtual ~MixerBoard();
+
+   void UpdatePrefs();
 
    // Add clusters for any tracks we're not yet showing.
    // Update pointers for tracks we're aleady showing.
@@ -265,19 +270,14 @@ private:
 
    // event handlers
    void OnSize(wxSizeEvent &evt);
+   void OnTimer(wxCommandEvent &event);
 
 
 public:
    // mute & solo button images: Create once and store on MixerBoard for use in all MixerTrackClusters.
-   wxImage* mImageMuteUp;
-   wxImage* mImageMuteOver;
-   wxImage* mImageMuteDown;
-   wxImage* mImageMuteDownWhileSolo; // the one actually alternate image
-   wxImage* mImageMuteDisabled;
-   wxImage* mImageSoloUp;
-   wxImage* mImageSoloOver;
-   wxImage* mImageSoloDown;
-   wxImage* mImageSoloDisabled;
+   std::unique_ptr<wxImage> mImageMuteUp, mImageMuteOver, mImageMuteDown,
+      mImageMuteDownWhileSolo, // the one actually alternate image
+      mImageMuteDisabled, mImageSoloUp, mImageSoloOver, mImageSoloDown, mImageSoloDisabled;
 
    int mMuteSoloWidth;
 
@@ -296,7 +296,7 @@ public:
 };
 
 
-class MixerBoardFrame : public wxFrame
+class MixerBoardFrame final : public wxFrame
 {
 public:
    MixerBoardFrame(AudacityProject* parent);
@@ -307,6 +307,7 @@ private:
    void OnCloseWindow(wxCloseEvent &WXUNUSED(event));
    void OnMaximize(wxMaximizeEvent &event);
    void OnSize(wxSizeEvent &evt);
+   void OnKeyEvent(wxKeyEvent &evt);
 
 public:
    MixerBoard* mMixerBoard;

@@ -32,7 +32,7 @@ bool EffectSimpleMono::Process()
    this->CopyInputTracks(); // Set up mOutputTracks.
    bool bGoodResult = true;
 
-   SelectedTrackListOfKindIterator iter(Track::Wave, mOutputTracks);
+   SelectedTrackListOfKindIterator iter(Track::Wave, mOutputTracks.get());
    WaveTrack* pOutWaveTrack = (WaveTrack*)(iter.First());
    mCurTrackNum = 0;
    while (pOutWaveTrack != NULL)
@@ -50,8 +50,8 @@ bool EffectSimpleMono::Process()
       if (mCurT1 > mCurT0) {
 
          //Transform the marker timepoints to samples
-         sampleCount start = pOutWaveTrack->TimeToLongSamples(mCurT0);
-         sampleCount end = pOutWaveTrack->TimeToLongSamples(mCurT1);
+         auto start = pOutWaveTrack->TimeToLongSamples(mCurT0);
+         auto end = pOutWaveTrack->TimeToLongSamples(mCurT1);
 
          //Get the track rate and samples
          mCurRate = pOutWaveTrack->GetRate();
@@ -81,7 +81,6 @@ bool EffectSimpleMono::Process()
 bool EffectSimpleMono::ProcessOne(WaveTrack * track,
                                   sampleCount start, sampleCount end)
 {
-   sampleCount s;
    //Get the length of the buffer (as double). len is
    //used simple to calculate a progress meter, so it is easier
    //to make it a double now than it is to do it later
@@ -93,14 +92,12 @@ bool EffectSimpleMono::ProcessOne(WaveTrack * track,
 
    //Go through the track one buffer at a time. s counts which
    //sample the current buffer starts at.
-   s = start;
+   auto s = start;
    while (s < end) {
       //Get a block of samples (smaller than the size of the buffer)
-      sampleCount block = track->GetBestBlockSize(s);
-
       //Adjust the block size if it is the final block in the track
-      if (s + block > end)
-         block = end - s;
+      const auto block =
+         limitSampleBufferSize( track->GetBestBlockSize(s), end - s );
 
       //Get the samples from the track and put them in the buffer
       track->Get((samplePtr) buffer, floatSample, s, block);

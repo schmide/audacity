@@ -19,13 +19,13 @@
 *//********************************************************************/
 
 #include "../Audacity.h"
+#include "PlaybackPrefs.h"
 
 #include <wx/defs.h>
 #include <wx/textctrl.h>
 
 #include "../ShuttleGui.h"
-
-#include "PlaybackPrefs.h"
+#include "../Prefs.h"
 
 PlaybackPrefs::PlaybackPrefs(wxWindow * parent)
 :  PrefsPanel(parent, _("Playback"))
@@ -122,3 +122,10 @@ bool PlaybackPrefs::Apply()
 
    return true;
 }
+
+PrefsPanel *PlaybackPrefsFactory::Create(wxWindow *parent)
+{
+   wxASSERT(parent); // to justify safenew
+   return safenew PlaybackPrefs(parent);
+}
+

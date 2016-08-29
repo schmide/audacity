@@ -16,13 +16,13 @@
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
 
-#include "../ShuttleGui.h"
-
 #include "Effect.h"
+
+class ShuttleGui;
 
 #define REPEAT_PLUGIN_SYMBOL XO("Repeat")
 
-class EffectRepeat : public Effect
+class EffectRepeat final : public Effect
 {
 public:
    EffectRepeat();
@@ -30,24 +30,24 @@ public:
 
    // IdentInterface implementation
 
-   virtual wxString GetSymbol();
-   virtual wxString GetDescription();
+   wxString GetSymbol() override;
+   wxString GetDescription() override;
 
    // EffectIdentInterface implementation
 
-   virtual EffectType GetType();
+   EffectType GetType() override;
 
    // EffectClientInterface implementation
 
-   virtual bool GetAutomationParameters(EffectAutomationParameters & parms);
-   virtual bool SetAutomationParameters(EffectAutomationParameters & parms);
+   bool GetAutomationParameters(EffectAutomationParameters & parms) override;
+   bool SetAutomationParameters(EffectAutomationParameters & parms) override;
 
    // Effect implementation
 
-   virtual bool Process();
-   virtual void PopulateOrExchange(ShuttleGui & S);
-   virtual bool TransferDataToWindow();
-   virtual bool TransferDataFromWindow();
+   bool Process() override;
+   void PopulateOrExchange(ShuttleGui & S) override;
+   bool TransferDataToWindow() override;
+   bool TransferDataFromWindow() override;
 
 private:
    // EffectRepeat implementation
@@ -59,6 +59,7 @@ private:
    int repeatCount;
 
    wxTextCtrl   *mRepeatCount;
+   wxStaticText *mCurrentTime;
    wxStaticText *mTotalTime;
 
    DECLARE_EVENT_TABLE();

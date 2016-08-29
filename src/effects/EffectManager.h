@@ -21,6 +21,8 @@ effects.
 #ifndef __AUDACITY_EFFECTMANAGER__
 #define __AUDACITY_EFFECTMANAGER__
 
+#include "../Experimental.h"
+
 #include <wx/choice.h>
 #include <wx/dialog.h>
 #include <wx/event.h>
@@ -33,6 +35,7 @@ effects.
 
 WX_DEFINE_USER_EXPORTED_ARRAY(Effect *, EffectArray, class AUDACITY_DLL_API);
 WX_DECLARE_STRING_HASH_MAP_WITH_DECL(Effect *, EffectMap, class AUDACITY_DLL_API);
+WX_DECLARE_STRING_HASH_MAP_WITH_DECL(std::shared_ptr<Effect>, EffectOwnerMap, class AUDACITY_DLL_API);
 
 #if defined(EXPERIMENTAL_EFFECTS_RACK)
 class EffectRack;
@@ -56,10 +59,11 @@ public:
    EffectManager();
    virtual ~EffectManager();
 
-   /** Register an effect so it can be executed. */
+   /** (Un)Register an effect so it can be executed. */
    // Here solely for the purpose of Nyquist Workbench until
    // a better solution is devised.
-   void RegisterEffect(Effect *f);
+   const PluginID & RegisterEffect(Effect *f);
+   void UnregisterEffect(const PluginID & ID);
 
    /** Run an effect given the plugin ID */
    // Returns true on success.  Will only operate on tracks that
@@ -76,6 +80,7 @@ public:
    wxString GetEffectName(const PluginID & ID);
    wxString GetEffectIdentifier(const PluginID & ID);
    wxString GetEffectDescription(const PluginID & ID);
+   bool IsHidden(const PluginID & ID);
 
    /** Support for batch commands */
    bool SupportsAutomation(const PluginID & ID);
@@ -87,7 +92,11 @@ public:
    wxString GetDefaultPreset(const PluginID & ID);
    void SetBatchProcessing(const PluginID & ID, bool start);
 
-      // Realtime effect processing
+   /** Allow effects to disable saving the state at run time */
+   void SetSkipStateFlag(bool flag);
+   bool GetSkipStateFlag();
+
+   // Realtime effect processing
    bool RealtimeIsActive();
    bool RealtimeIsSuspended();
    void RealtimeAddEffect(Effect *effect);
@@ -119,7 +128,7 @@ private:
 
 private:
    EffectMap mEffects;
-   EffectMap mHostEffects;
+   EffectOwnerMap mHostEffects;
 
    int mNumEffects;
 
@@ -130,6 +139,10 @@ private:
    bool mRealtimeActive;
    wxArrayInt mRealtimeChans;
    wxArrayDouble mRealtimeRates;
+
+   // Set true if we want to skip pushing state 
+   // after processing at effect run time.
+   bool mSkipStateFlag;
 
 #if defined(EXPERIMENTAL_EFFECTS_RACK)
    EffectRack *mRack;

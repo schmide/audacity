@@ -22,6 +22,9 @@ greater use in future.
 *//*******************************************************************/
 
 #include "../Audacity.h"
+#include "Effect.h"
+
+#include <algorithm>
 
 #include <wx/defs.h>
 #include <wx/hashmap.h>
@@ -32,43 +35,48 @@ greater use in future.
 #include <wx/tglbtn.h>
 #include <wx/timer.h>
 #include <wx/utils.h>
+#include <wx/log.h>
 
 #include "audacity/ConfigInterface.h"
 
-#include "Effect.h"
 #include "../AudioIO.h"
+#include "../LabelTrack.h"
 #include "../Mix.h"
 #include "../Prefs.h"
 #include "../Project.h"
+#include "../ShuttleGui.h"
 #include "../WaveTrack.h"
 #include "../toolbars/ControlToolBar.h"
 #include "../widgets/AButton.h"
 #include "../widgets/ProgressDialog.h"
 #include "../ondemand/ODManager.h"
 #include "TimeWarper.h"
+#include "nyquist/Nyquist.h"
 
 #if defined(__WXMAC__)
-#include <wx/mac/private.h>
+#include <Cocoa/Cocoa.h>
 #endif
 
-static const int kDummyID = 30000;
-static const int kSaveAsID = 30001;
-static const int kImportID = 30002;
-static const int kExportID = 30003;
-static const int kDefaultsID = 30004;
-static const int kOptionsID = 30005;
-static const int kUserPresetsDummyID = 30006;
-static const int kDeletePresetDummyID = 30007;
-static const int kMenuID = 30100;
-static const int kEnableID = 30101;
-static const int kPlayID = 30102;
-static const int kRewindID = 30103;
-static const int kFFwdID = 30104;
-static const int kPlaybackID = 30105;
-static const int kCaptureID = 30106;
-static const int kUserPresetsID = 31000;
-static const int kDeletePresetID = 32000;
-static const int kFactoryPresetsID = 33000;
+#include "../Experimental.h"
+
+static const int kDummyID = 20000;
+static const int kSaveAsID = 20001;
+static const int kImportID = 20002;
+static const int kExportID = 20003;
+static const int kDefaultsID = 20004;
+static const int kOptionsID = 20005;
+static const int kUserPresetsDummyID = 20006;
+static const int kDeletePresetDummyID = 20007;
+static const int kMenuID = 20100;
+static const int kEnableID = 20101;
+static const int kPlayID = 20102;
+static const int kRewindID = 20103;
+static const int kFFwdID = 20104;
+static const int kPlaybackID = 20105;
+static const int kCaptureID = 20106;
+static const int kUserPresetsID = 21000;
+static const int kDeletePresetID = 22000;
+static const int kFactoryPresetsID = 23000;
 
 const wxString Effect::kUserPresetIdent = wxT("User Preset:");
 const wxString Effect::kFactoryPresetIdent = wxT("Factory Preset:");
@@ -86,9 +94,14 @@ Effect::Effect()
    mWarper = NULL;
 
    mTracks = NULL;
-   mOutputTracks = NULL;
    mOutputTracksType = Track::None;
+   mT0 = 0.0;
+   mT1 = 0.0;
    mDuration = 0.0;
+   mIsPreview = false;
+   mIsLinearEffect = false;
+   mPreviewWithNotSelected = false;
+   mPreviewFullSelection = false;
    mNumTracks = 0;
    mNumGroups = 0;
    mProgress = NULL;
@@ -122,16 +135,6 @@ Effect::Effect()
 
 Effect::~Effect()
 {
-   if (mOutputTracks)
-   {
-      delete mOutputTracks;
-   }
-
-   if (mWarper != NULL)
-   {
-      delete mWarper;
-   }
-
    if (mUIDialog)
    {
       mUIDialog->Close();
@@ -187,7 +190,7 @@ wxString Effect::GetVendor()
       return mClient->GetVendor();
    }
 
-   return _("Audacity");
+   return XO("Audacity");
 }
 
 wxString Effect::GetVersion()
@@ -217,7 +220,7 @@ wxString Effect::GetFamily()
       return mClient->GetFamily();
    }
 
-   return _("Audacity");
+   return XO("Audacity");
 }
 
 bool Effect::IsInteractive()
@@ -322,7 +325,7 @@ int Effect::GetMidiOutCount()
    return 0;
 }
 
-void Effect::SetSampleRate(sampleCount rate)
+void Effect::SetSampleRate(double rate)
 {
    if (mClient)
    {
@@ -412,6 +415,8 @@ bool Effect::RealtimeInitialize()
       return mClient->RealtimeInitialize();
    }
 
+   mBlockSize = 512;
+
    return false;
 }
 
@@ -446,9 +451,15 @@ bool Effect::RealtimeSuspend()
          mRealtimeSuspendLock.Leave();
          return true;
       }
+
+      return false;
    }
 
-   return false;
+   mRealtimeSuspendLock.Enter();
+   mRealtimeSuspendCount++;
+   mRealtimeSuspendLock.Leave();
+
+   return true;
 }
 
 bool Effect::RealtimeResume()
@@ -462,9 +473,15 @@ bool Effect::RealtimeResume()
          mRealtimeSuspendLock.Leave();
          return true;
       }
+
+      return false;
    }
 
-   return false;
+   mRealtimeSuspendLock.Enter();
+   mRealtimeSuspendCount--;
+   mRealtimeSuspendLock.Leave();
+
+   return true;
 }
 
 bool Effect::RealtimeProcessStart()
@@ -668,6 +685,7 @@ bool Effect::CloseUI()
    mUIParent->RemoveEventHandler(this);
 
    mUIParent = NULL;
+   mUIDialog = NULL;
 
    return true;
 }
@@ -701,47 +719,24 @@ double Effect::GetDefaultDuration()
    return 30.0;
 }
 
-double Effect::GetDuration(bool *isSelection)
+double Effect::GetDuration()
 {
-   if (mT1 > mT0)
-   {
-      // there is a selection: let's fit in there...
-      // MJS: note that this is just for the TTC and is independent of the track rate
-      // but we do need to make sure we have the right number of samples at the project rate
-      double quantMT0 = QUANTIZED_TIME(mT0, mProjectRate);
-      double quantMT1 = QUANTIZED_TIME(mT1, mProjectRate);
-      mDuration = quantMT1 - quantMT0;
-
-      if (isSelection)
-      {
-         *isSelection = true;
-      }
-
-      return mDuration;
-   }
-
-   if (isSelection)
-   {
-      *isSelection = false;
-   }
-
-   GetPrivateConfig(GetCurrentSettingsGroup(), wxT("LastUsedDuration"), mDuration, 0.0);
-   if (mDuration > 0.0)
-   {
-      return mDuration;
-   }
-
    if (mDuration < 0.0)
    {
       mDuration = 0.0;
    }
 
-   if (GetType() == EffectTypeGenerate)
-   {
-      mDuration = GetDefaultDuration();
-   }
-
    return mDuration;
+}
+
+wxString Effect::GetDurationFormat()
+{
+   return mDurationFormat;
+}
+
+wxString Effect::GetSelectionFormat()
+{
+   return GetActiveProject()->GetSelectionFormat();
 }
 
 void Effect::SetDuration(double seconds)
@@ -751,12 +746,14 @@ void Effect::SetDuration(double seconds)
       seconds = 0.0;
    }
 
-   if (mDuration != seconds)
+   if (GetType() == EffectTypeGenerate)
    {
       SetPrivateConfig(GetCurrentSettingsGroup(), wxT("LastUsedDuration"), seconds);
    }
 
    mDuration = seconds;
+
+   mIsSelection = false;
 
    return;
 }
@@ -776,14 +773,14 @@ void Effect::Preview()
 
 wxDialog *Effect::CreateUI(wxWindow *parent, EffectUIClientInterface *client)
 {
-   EffectUIHost *dlg = new EffectUIHost(parent, this, client);
+   Destroy_ptr<EffectUIHost> dlg
+      { safenew EffectUIHost{ parent, this, client} };
 
    if (dlg->Initialize())
    {
-      return dlg;
+      // release() is safe because parent will own it
+      return dlg.release();
    }
-
-   delete dlg;
 
    return NULL;
 }
@@ -850,11 +847,6 @@ bool Effect::GetSharedConfig(const wxString & group, const wxString & key, doubl
    return PluginManager::Get().GetSharedConfig(GetID(), group, key, value, defval);
 }
 
-bool Effect::GetSharedConfig(const wxString & group, const wxString & key, sampleCount & value, sampleCount defval)
-{
-   return PluginManager::Get().GetSharedConfig(GetID(), group, key, value, defval);
-}
-
 bool Effect::SetSharedConfig(const wxString & group, const wxString & key, const wxString & value)
 {
    return PluginManager::Get().SetSharedConfig(GetID(), group, key, value);
@@ -876,11 +868,6 @@ bool Effect::SetSharedConfig(const wxString & group, const wxString & key, const
 }
 
 bool Effect::SetSharedConfig(const wxString & group, const wxString & key, const double & value)
-{
-   return PluginManager::Get().SetSharedConfig(GetID(), group, key, value);
-}
-
-bool Effect::SetSharedConfig(const wxString & group, const wxString & key, const sampleCount & value)
 {
    return PluginManager::Get().SetSharedConfig(GetID(), group, key, value);
 }
@@ -930,11 +917,6 @@ bool Effect::GetPrivateConfig(const wxString & group, const wxString & key, doub
    return PluginManager::Get().GetPrivateConfig(GetID(), group, key, value, defval);
 }
 
-bool Effect::GetPrivateConfig(const wxString & group, const wxString & key, sampleCount & value, sampleCount defval)
-{
-   return PluginManager::Get().GetPrivateConfig(GetID(), group, key, value, defval);
-}
-
 bool Effect::SetPrivateConfig(const wxString & group, const wxString & key, const wxString & value)
 {
    return PluginManager::Get().SetPrivateConfig(GetID(), group, key, value);
@@ -956,11 +938,6 @@ bool Effect::SetPrivateConfig(const wxString & group, const wxString & key, cons
 }
 
 bool Effect::SetPrivateConfig(const wxString & group, const wxString & key, const double & value)
-{
-   return PluginManager::Get().SetPrivateConfig(GetID(), group, key, value);
-}
-
-bool Effect::SetPrivateConfig(const wxString & group, const wxString & key, const sampleCount & value)
 {
    return PluginManager::Get().SetPrivateConfig(GetID(), group, key, value);
 }
@@ -1072,7 +1049,7 @@ bool Effect::SetAutomationParameters(const wxString & parms)
    {
       wxMessageBox(
          wxString::Format(
-            _("Could not update effect \"%s\" with:\n%s"),
+            _("%s: Could not load settings below. Default settings will be used.\n\n%s"),
             GetName().c_str(),
             preset.c_str()
          )
@@ -1146,6 +1123,16 @@ void Effect::SetBatchProcessing(bool start)
    }
 }
 
+namespace {
+   struct SetProgress {
+      SetProgress(ProgressDialog *& mProgress_, ProgressDialog *progress)
+         : mProgress(mProgress_)
+      { mProgress = progress; }
+      ~SetProgress() { mProgress = nullptr; }
+      ProgressDialog *& mProgress;
+   };
+}
+
 bool Effect::DoEffect(wxWindow *parent,
                       double projectRate,
                       TrackList *list,
@@ -1155,19 +1142,39 @@ bool Effect::DoEffect(wxWindow *parent,
 {
    wxASSERT(selectedRegion->duration() >= 0.0);
 
-   if (mOutputTracks)
-   {
-      delete mOutputTracks;
-      mOutputTracks = NULL;
-   }
+   mOutputTracks.reset();
 
    mFactory = factory;
    mProjectRate = projectRate;
    mParent = parent;
    mTracks = list;
+   
+   bool isSelection = false;
+
+   mDuration = 0.0;
+
+   if (GetType() == EffectTypeGenerate)
+   {
+      GetPrivateConfig(GetCurrentSettingsGroup(), wxT("LastUsedDuration"), mDuration, GetDefaultDuration());
+   }
+
    mT0 = selectedRegion->t0();
    mT1 = selectedRegion->t1();
-   mDuration = GetDuration();
+   if (mT1 > mT0)
+   {
+      // there is a selection: let's fit in there...
+      // MJS: note that this is just for the TTC and is independent of the track rate
+      // but we do need to make sure we have the right number of samples at the project rate
+      double quantMT0 = QUANTIZED_TIME(mT0, mProjectRate);
+      double quantMT1 = QUANTIZED_TIME(mT1, mProjectRate);
+      mDuration = quantMT1 - quantMT0;
+      mT1 = mT0 + mDuration;
+
+      isSelection = true;
+   }
+
+   mDurationFormat = isSelection ? _("hh:mm:ss + samples") : _("hh:mm:ss + milliseconds");
+
 #ifdef EXPERIMENTAL_SPECTRAL_EDITING
    mF0 = selectedRegion->f0();
    mF1 = selectedRegion->f1();
@@ -1198,21 +1205,16 @@ bool Effect::DoEffect(wxWindow *parent,
    bool skipFlag = CheckWhetherSkipEffect();
    if (skipFlag == false)
    {
-      mProgress = new ProgressDialog(GetName(),
-                                     wxString::Format(_("Applying %s..."), GetName().c_str()),
-                                     pdlgHideStopButton);
+      ProgressDialog progress(GetName(),
+         wxString::Format(_("Applying %s..."), GetName().c_str()),
+         pdlgHideStopButton);
+      SetProgress sp(mProgress, &progress);
       returnVal = Process();
-      delete mProgress;
-      mProgress = NULL;
    }
 
    End();
 
-   if (mOutputTracks)
-   {
-      delete mOutputTracks;
-      mOutputTracks = NULL;
-   }
+   mOutputTracks.reset();
 
    if (returnVal)
    {
@@ -1254,6 +1256,11 @@ bool Effect::Process()
    CopyInputTracks(Track::All);
    bool bGoodResult = true;
 
+   // It's possible that the number of channels the effect expects changed based on
+   // the parameters (the Audacity Reverb effect does when the stereo width is 0).
+   mNumAudioIn = GetAudioInCount();
+   mNumAudioOut = GetAudioOutCount();
+
    mPass = 1;
    if (InitPass1())
    {
@@ -1282,11 +1289,10 @@ bool Effect::ProcessPass()
 
    ChannelName map[3];
 
-   sampleCount prevBufferSize = 0;
    mBufferSize = 0;
    mBlockSize = 0;
 
-   TrackListIterator iter(mOutputTracks);
+   TrackListIterator iter(mOutputTracks.get());
    int count = 0;
    bool clear = false;
    Track* t = iter.First();
@@ -1367,12 +1373,12 @@ bool Effect::ProcessPass()
       SetSampleRate(left->GetRate());
 
       // Get the block size the client wants to use
-      sampleCount max = left->GetMaxBlockSize() * 2;
+      auto max = left->GetMaxBlockSize() * 2;
       mBlockSize = SetBlockSize(max);
 
       // Calculate the buffer size to be at least the max rounded up to the clients
       // selected block size.
-      prevBufferSize = mBufferSize;
+      const auto prevBufferSize = mBufferSize;
       mBufferSize = ((max + (mBlockSize - 1)) / mBlockSize) * mBlockSize;
 
       // If the buffer size has changed, then (re)allocate the buffers
@@ -1529,30 +1535,37 @@ bool Effect::ProcessTrack(int count,
    // there is no further input data to process, the loop continues to call the
    // effect with an empty input buffer until the effect has had a chance to 
    // return all of the remaining delayed samples.
-   sampleCount inLeftPos = leftStart;
-   sampleCount inRightPos = rightStart;
-   sampleCount outLeftPos = leftStart;
-   sampleCount outRightPos = rightStart;
+   auto inLeftPos = leftStart;
+   auto inRightPos = rightStart;
+   auto outLeftPos = leftStart;
+   auto outRightPos = rightStart;
 
-   sampleCount inputRemaining = len;
-   sampleCount delayRemaining = 0;
-   sampleCount curBlockSize = 0;
-   sampleCount curDelay = 0;
+   auto inputRemaining = len;
+   decltype(GetLatency()) curDelay = 0, delayRemaining = 0;
+   decltype(mBlockSize) curBlockSize = 0;
 
-   sampleCount inputBufferCnt = 0;
-   sampleCount outputBufferCnt = 0;
+   decltype(mBufferSize) inputBufferCnt = 0;
+   decltype(mBufferSize) outputBufferCnt = 0;
    bool cleared = false;
 
    int chans = wxMin(mNumAudioOut, mNumChannels);
 
-   WaveTrack *genLeft = NULL;
-   WaveTrack *genRight = NULL;
-   sampleCount genLength = 0;
+   std::unique_ptr<WaveTrack> genLeft, genRight;
+   decltype(len) genLength = 0;
    bool isGenerator = GetType() == EffectTypeGenerate;
    bool isProcessor = GetType() == EffectTypeProcess;
+   double genDur = 0;
    if (isGenerator)
    {
-      genLength = left->GetRate() * mDuration;
+      if (mIsPreview) {
+         gPrefs->Read(wxT("/AudioIO/EffectsPreviewLen"), &genDur, 6.0);
+         genDur = wxMin(mDuration, CalcPreviewInputLength(genDur));
+      }
+      else {
+         genDur = mDuration;
+      }
+
+      genLength = left->GetRate() * genDur;
       delayRemaining = genLength;
       cleared = true;
 
@@ -1565,20 +1578,17 @@ bool Effect::ProcessTrack(int count,
    }
 
    // Call the effect until we run out of input or delayed samples
-   while (inputRemaining || delayRemaining)
+   while (inputRemaining != 0 || delayRemaining != 0)
    {
       // Still working on the input samples
-      if (inputRemaining)
+      if (inputRemaining != 0)
       {
          // Need to refill the input buffers
          if (inputBufferCnt == 0)
          {
             // Calculate the number of samples to get
-            inputBufferCnt = mBufferSize;
-            if (inputBufferCnt > inputRemaining)
-            {
-               inputBufferCnt = inputRemaining;
-            }
+            inputBufferCnt =
+               limitSampleBufferSize( mBufferSize, inputRemaining );
 
             // Fill the input buffers
             left->Get((samplePtr) mInBuffer[0], floatSample, inLeftPos, inputBufferCnt);
@@ -1604,37 +1614,30 @@ bool Effect::ProcessTrack(int count,
 
             // Clear the remainder of the buffers so that a full block can be passed
             // to the effect
-            sampleCount cnt = mBlockSize - curBlockSize;
+            auto cnt = mBlockSize - curBlockSize;
             for (int i = 0; i < mNumChannels; i++)
             {
-               for (int j = 0 ; j < cnt; j++)
+               for (decltype(cnt) j = 0 ; j < cnt; j++)
                {
                   mInBufPos[i][j + curBlockSize] = 0.0;
                }
             }
 
             // Might be able to use up some of the delayed samples
-            if (delayRemaining)
+            if (delayRemaining != 0)
             {
                // Don't use more than needed
-               if (delayRemaining < cnt)
-               {
-                  cnt = delayRemaining;
-               }
+               cnt = limitSampleBufferSize(cnt, delayRemaining);
                delayRemaining -= cnt;
                curBlockSize += cnt;
             }
          }
       }
       // We've exhausted the input samples and are now working on the delay
-      else if (delayRemaining)
+      else if (delayRemaining != 0)
       {
          // Calculate the number of samples to process
-         curBlockSize = mBlockSize;
-         if (curBlockSize > delayRemaining)
-         {
-            curBlockSize = delayRemaining;
-         }
+         curBlockSize = limitSampleBufferSize( mBlockSize, delayRemaining );
          delayRemaining -= curBlockSize;
 
          // From this point on, we only want to feed zeros to the plugin
@@ -1656,29 +1659,20 @@ bool Effect::ProcessTrack(int count,
       }
 
       // Finally call the plugin to process the block
-      sampleCount processed;
+      decltype(curBlockSize) processed;
       try
       {
          processed = ProcessBlock(mInBufPos, mOutBufPos, curBlockSize);
       }
       catch(...)
       {
-         if (genLeft)
-         {
-            delete genLeft;
-         }
-
-         if (genRight)
-         {
-            delete genRight;
-         }
-
          return false;
       }
       wxASSERT(processed == curBlockSize);
+      wxUnusedVar(processed);
 
       // Bump to next input buffer position
-      if (inputRemaining)
+      if (inputRemaining != 0)
       {
          for (int i = 0; i < mNumChannels; i++)
          {
@@ -1698,7 +1692,7 @@ bool Effect::ProcessTrack(int count,
       // Get the current number of delayed samples and accumulate
       if (isProcessor)
       {
-         sampleCount delay = GetLatency();
+         auto delay = GetLatency();
          curDelay += delay;
          delayRemaining += delay;
 
@@ -1744,7 +1738,14 @@ bool Effect::ProcessTrack(int count,
             left->Set((samplePtr) mOutBuffer[0], floatSample, outLeftPos, outputBufferCnt);
             if (right)
             {
-               right->Set((samplePtr) mOutBuffer[1], floatSample, outRightPos, outputBufferCnt);
+               if (chans >= 2)
+               {
+                  right->Set((samplePtr) mOutBuffer[1], floatSample, outRightPos, outputBufferCnt);
+               }
+               else
+               {
+                  right->Set((samplePtr) mOutBuffer[0], floatSample, outRightPos, outputBufferCnt);
+               }
             }
          }
          else if (isGenerator)
@@ -1794,7 +1795,14 @@ bool Effect::ProcessTrack(int count,
          left->Set((samplePtr) mOutBuffer[0], floatSample, outLeftPos, outputBufferCnt);
          if (right)
          {
-            right->Set((samplePtr) mOutBuffer[1], floatSample, outRightPos, outputBufferCnt);
+            if (chans >= 2)
+            {
+               right->Set((samplePtr) mOutBuffer[1], floatSample, outRightPos, outputBufferCnt);
+            }
+            else
+            {
+               right->Set((samplePtr) mOutBuffer[0], floatSample, outRightPos, outputBufferCnt);
+            }
          }
       }
       else if (isGenerator)
@@ -1809,21 +1817,35 @@ bool Effect::ProcessTrack(int count,
 
    if (isGenerator)
    {
-      StepTimeWarper *warper = new StepTimeWarper(mT0 + genLength, genLength - (mT1 - mT0));
+      AudacityProject *p = GetActiveProject();
+
+      // PRL:  this code was here and could not have been the right
+      // intent, mixing time and sampleCount values:
+      // StepTimeWarper warper(mT0 + genLength, genLength - (mT1 - mT0));
+
+      // This looks like what it should have been:
+      // StepTimeWarper warper(mT0 + genDur, genDur - (mT1 - mT0));
+      // But rather than fix it, I will just disable the use of it for now.
+      // The purpose was to remap split lines inside the selected region when
+      // a generator replaces it with sound of different duration.  But
+      // the "correct" version might have the effect of mapping some splits too
+      // far left, to before the seletion.
+      // In practice the wrong version probably did nothing most of the time,
+      // because the cutoff time for the step time warper was 44100 times too
+      // far from mT0.
 
       // Transfer the data from the temporary tracks to the actual ones
       genLeft->Flush();
-      left->ClearAndPaste(mT0, mT1, genLeft, true, true, warper);
-      delete genLeft;
+      // mT1 gives us the NEW selection. We want to replace up to GetSel1().
+      left->ClearAndPaste(mT0, p->GetSel1(), genLeft.get(), true, true,
+                          nullptr /* &warper */);
 
       if (genRight)
       {
          genRight->Flush();
-         right->ClearAndPaste(mT0, mT1, genRight, true, true, warper);
-         delete genRight;
+         right->ClearAndPaste(mT0, mT1, genRight.get(), true, true,
+                              nullptr /* &warper */);
       }
-
-      delete warper;
    }
 
    // Allow the plugin to cleanup
@@ -1929,6 +1951,22 @@ void Effect::EnableDebug(bool enable)
    mUIDebug = enable;
 }
 
+void Effect::SetLinearEffectFlag(bool linearEffectFlag)
+{
+   mIsLinearEffect = linearEffectFlag;
+}
+
+void Effect::SetPreviewFullSelectionFlag(bool previewDurationFlag)
+{
+   mPreviewFullSelection = previewDurationFlag;
+}
+
+
+void Effect::IncludeNotSelectedPreviewTracks(bool includeNotSelected)
+{
+   mPreviewWithNotSelected = includeNotSelected;
+}
+
 bool Effect::TotalProgress(double frac)
 {
    int updateResult = (mProgress ?
@@ -1937,7 +1975,7 @@ bool Effect::TotalProgress(double frac)
    return (updateResult != eProgressSuccess);
 }
 
-bool Effect::TrackProgress(int whichTrack, double frac, wxString msg)
+bool Effect::TrackProgress(int whichTrack, double frac, const wxString &msg)
 {
    int updateResult = (mProgress ?
       mProgress->Update(whichTrack + frac, (double) mNumTracks, msg) :
@@ -1945,10 +1983,10 @@ bool Effect::TrackProgress(int whichTrack, double frac, wxString msg)
    return (updateResult != eProgressSuccess);
 }
 
-bool Effect::TrackGroupProgress(int whichGroup, double frac)
+bool Effect::TrackGroupProgress(int whichGroup, double frac, const wxString &msg)
 {
    int updateResult = (mProgress ?
-      mProgress->Update(whichGroup + frac, (double) mNumGroups) :
+      mProgress->Update(whichGroup + frac, (double) mNumGroups, msg) :
       eProgressSuccess);
    return (updateResult != eProgressSuccess);
 }
@@ -1973,8 +2011,8 @@ void Effect::GetSamples(WaveTrack *track, sampleCount *start, sampleCount *len)
 
    if (t1 > t0) {
       *start = track->TimeToLongSamples(t0);
-      sampleCount end = track->TimeToLongSamples(t1);
-      *len = (sampleCount)(end - *start);
+      auto end = track->TimeToLongSamples(t1);
+      *len = end - *start;
    }
    else {
       *start = 0;
@@ -1982,22 +2020,16 @@ void Effect::GetSamples(WaveTrack *track, sampleCount *start, sampleCount *len)
    }
 }
 
-void Effect::SetTimeWarper(TimeWarper *warper)
+void Effect::SetTimeWarper(std::unique_ptr<TimeWarper> &&warper)
 {
-   if (mWarper != NULL)
-   {
-      delete mWarper;
-      mWarper = NULL;
-   }
-
-   wxASSERT(warper != NULL);
-   mWarper = warper;
+   wxASSERT(warper);
+   mWarper = std::move(warper);
 }
 
 TimeWarper *Effect::GetTimeWarper()
 {
-   wxASSERT(mWarper != NULL);
-   return mWarper;
+   wxASSERT(mWarper);
+   return mWarper.get();
 }
 
 //
@@ -2006,13 +2038,18 @@ TimeWarper *Effect::GetTimeWarper()
 // Use these two methods to copy the input tracks to mOutputTracks, if
 // doing the processing on them, and replacing the originals only on success (and not cancel).
 // Copy the group tracks that have tracks selected
+void Effect::CopyInputTracks()
+{
+   CopyInputTracks(Track::Wave);
+}
+
 void Effect::CopyInputTracks(int trackType)
 {
    // Reset map
    mIMap.Clear();
    mOMap.Clear();
 
-   mOutputTracks = new TrackList(true);
+   mOutputTracks = std::make_unique<TrackList>();
    mOutputTracksType = trackType;
 
    //iterate over tracks of type trackType (All types if Track::All)
@@ -2025,30 +2062,120 @@ void Effect::CopyInputTracks(int trackType)
       if (aTrack->GetSelected() ||
             (trackType == Track::All && aTrack->IsSyncLockSelected()))
       {
-         Track *o = aTrack->Duplicate();
-         mOutputTracks->Add(o);
+         Track *o = mOutputTracks->Add(aTrack->Duplicate());
          mIMap.Add(aTrack);
          mOMap.Add(o);
       }
    }
 }
 
-void Effect::AddToOutputTracks(Track *t)
+Track *Effect::AddToOutputTracks(std::unique_ptr<Track> &&t)
 {
-   mOutputTracks->Add(t);
    mIMap.Add(NULL);
-   mOMap.Add(t);
+   mOMap.Add(t.get());
+   return mOutputTracks->Add(std::move(t));
+}
+
+Effect::AddedAnalysisTrack::AddedAnalysisTrack(Effect *pEffect, const wxString &name)
+   : mpEffect(pEffect)
+{
+   LabelTrack::Holder pTrack{ pEffect->mFactory->NewLabelTrack() };
+   mpTrack = pTrack.get();
+   if (!name.empty())
+      pTrack->SetName(name);
+   pEffect->mTracks->Add(std::move(pTrack));
+}
+
+Effect::AddedAnalysisTrack::AddedAnalysisTrack(AddedAnalysisTrack &&that)
+{
+   mpEffect = that.mpEffect;
+   mpTrack = that.mpTrack;
+   that.Commit();
+}
+
+void Effect::AddedAnalysisTrack::Commit()
+{
+   mpEffect = nullptr;
+}
+
+Effect::AddedAnalysisTrack::~AddedAnalysisTrack()
+{
+   if (mpEffect) {
+      // not committed -- DELETE the label track
+      mpEffect->mTracks->Remove(mpTrack);
+   }
+}
+
+auto Effect::AddAnalysisTrack(const wxString &name) -> std::shared_ptr<AddedAnalysisTrack>
+{
+   return std::shared_ptr<AddedAnalysisTrack>
+      { safenew AddedAnalysisTrack{ this, name } };
+}
+
+Effect::ModifiedAnalysisTrack::ModifiedAnalysisTrack
+   (Effect *pEffect, const LabelTrack *pOrigTrack, const wxString &name)
+   : mpEffect(pEffect)
+{
+   // copy LabelTrack here, so it can be undone on cancel
+   auto newTrack = pOrigTrack->Copy(pOrigTrack->GetStartTime(), pOrigTrack->GetEndTime());
+
+   mpTrack = static_cast<LabelTrack*>(newTrack.get());
+
+   // Why doesn't LabelTrack::Copy complete the job? :
+   mpTrack->SetOffset(pOrigTrack->GetStartTime());
+   if (!name.empty())
+      mpTrack->SetName(name);
+
+   // mpOrigTrack came from mTracks which we own but expose as const to subclasses
+   // So it's okay that we cast it back to const
+   mpOrigTrack =
+      pEffect->mTracks->Replace(const_cast<LabelTrack*>(pOrigTrack),
+#ifdef __AUDACITY_OLD_STD__
+      std::shared_ptr<Track>(newTrack.release())
+#else
+      std::move(newTrack)
+#endif
+   );
+}
+
+Effect::ModifiedAnalysisTrack::ModifiedAnalysisTrack(ModifiedAnalysisTrack &&that)
+{
+   mpEffect = that.mpEffect;
+   mpTrack = that.mpTrack;
+   mpOrigTrack = std::move(that.mpOrigTrack);
+   that.Commit();
+}
+
+void Effect::ModifiedAnalysisTrack::Commit()
+{
+   mpEffect = nullptr;
+}
+
+Effect::ModifiedAnalysisTrack::~ModifiedAnalysisTrack()
+{
+   if (mpEffect) {
+      // not committed -- DELETE the label track
+      // mpOrigTrack came from mTracks which we own but expose as const to subclasses
+      // So it's okay that we cast it back to const
+      mpEffect->mTracks->Replace(mpTrack, std::move(mpOrigTrack));
+   }
+}
+
+auto Effect::ModifyAnalysisTrack
+   (const LabelTrack *pOrigTrack, const wxString &name) -> ModifiedAnalysisTrack
+{
+   return{ this, pOrigTrack, name };
 }
 
 // If bGoodResult, replace mTracks tracks with successfully processed mOutputTracks copies.
-// Else clear and delete mOutputTracks copies.
+// Else clear and DELETE mOutputTracks copies.
 void Effect::ReplaceProcessedTracks(const bool bGoodResult)
 {
-   wxASSERT(mOutputTracks != NULL); // Make sure we at least did the CopyInputTracks().
+   wxASSERT(mOutputTracks); // Make sure we at least did the CopyInputTracks().
 
    if (!bGoodResult) {
       // Processing failed or was cancelled so throw away the processed tracks.
-      mOutputTracks->Clear(true); // true => delete the tracks
+      mOutputTracks->Clear();
 
       // Reset map
       mIMap.Clear();
@@ -2058,19 +2185,19 @@ void Effect::ReplaceProcessedTracks(const bool bGoodResult)
       return;
    }
 
-   TrackListIterator iterOut(mOutputTracks);
+   auto iterOut = mOutputTracks->begin(), iterEnd = mOutputTracks->end();
 
-   Track *x;
    size_t cnt = mOMap.GetCount();
    size_t i = 0;
 
-   for (Track *o = iterOut.First(); o; o = x, i++) {
+   for (; iterOut != iterEnd; ++i) {
+      ListOfTracks::value_type o = std::move(*iterOut);
       // If tracks were removed from mOutputTracks, then there will be
       // tracks in the map that must be removed from mTracks.
-      while (i < cnt && mOMap[i] != o) {
+      while (i < cnt && mOMap[i] != o.get()) {
          Track *t = (Track *) mIMap[i];
          if (t) {
-            mTracks->Remove(t, true);
+            mTracks->Remove(t);
          }
          i++;
       }
@@ -2078,29 +2205,27 @@ void Effect::ReplaceProcessedTracks(const bool bGoodResult)
       // This should never happen
       wxASSERT(i < cnt);
 
-      // Remove the track from the output list...don't delete it
-      x = iterOut.RemoveCurrent(false);
+      // Remove the track from the output list...don't DELETE it
+      iterOut = mOutputTracks->erase(iterOut);
 
       Track *t = (Track *) mIMap[i];
       if (t == NULL)
       {
-         // This track is a new addition to output tracks; add it to mTracks
-         mTracks->Add(o);
+         // This track is a NEW addition to output tracks; add it to mTracks
+         mTracks->Add(std::move(o));
       }
       else
       {
-         // Replace mTracks entry with the new track
-         mTracks->Replace(t, o, false);
+         // Replace mTracks entry with the NEW track
+         WaveTrack *newTrack = static_cast<WaveTrack*>(o.get());
+         mTracks->Replace(t, std::move(o));
 
-         // Swap the wavecache track the ondemand task uses, since now the new
+         // Swap the wavecache track the ondemand task uses, since now the NEW
          // one will be kept in the project
          if (ODManager::IsInstanceCreated()) {
             ODManager::Instance()->ReplaceWaveTrack((WaveTrack *)t,
-                                                    (WaveTrack *)o);
+                                                    newTrack);
          }
-
-         // No longer need the original track
-         delete t;
       }
    }
 
@@ -2109,7 +2234,7 @@ void Effect::ReplaceProcessedTracks(const bool bGoodResult)
    while (i < cnt) {
       Track *t = (Track *) mIMap[i];
       if (t) {
-         mTracks->Remove((Track *)mIMap[i], true);
+         mTracks->Remove((Track *)mIMap[i]);
       }
       i++;
    }
@@ -2119,11 +2244,10 @@ void Effect::ReplaceProcessedTracks(const bool bGoodResult)
    mOMap.Clear();
 
    // Make sure we processed everything
-   wxASSERT(iterOut.First() == NULL);
+   wxASSERT(mOutputTracks->empty());
 
    // The output list is no longer needed
-   delete mOutputTracks;
-   mOutputTracks = NULL;
+   mOutputTracks.reset();
    mOutputTracksType = Track::None;
 }
 
@@ -2210,8 +2334,8 @@ bool Effect::RealtimeAddProcessor(int group, int chans, float rate)
          ochans -= mNumAudioOut;
       }
 
-      // Add a new processor
-      mClient->RealtimeAddProcessor(gchans, rate);
+      // Add a NEW processor
+      RealtimeAddProcessor(gchans, rate);
 
       // Bump to next processor
       mCurrentProcessor++;
@@ -2241,7 +2365,7 @@ sampleCount Effect::RealtimeProcess(int group,
    float **clientIn = (float **) alloca(mNumAudioIn * sizeof(float *));
    float **clientOut = (float **) alloca(mNumAudioOut * sizeof(float *));
    float *dummybuf = (float *) alloca(numSamples * sizeof(float));
-   sampleCount len = 0;
+   decltype(numSamples) len = 0;
    int ichans = chans;
    int ochans = chans;
    int gchans = chans;
@@ -2315,10 +2439,10 @@ sampleCount Effect::RealtimeProcess(int group,
 
       // Finally call the plugin to process the block
       len = 0;
-      for (sampleCount block = 0; block < numSamples; block += mBlockSize)
+      for (decltype(numSamples) block = 0; block < numSamples; block += mBlockSize)
       {
-         sampleCount cnt = (block + mBlockSize > numSamples ? numSamples - block : mBlockSize);
-         len += mClient->RealtimeProcess(processor, clientIn, clientOut, cnt);
+         auto cnt = (block + mBlockSize > numSamples ? numSamples - block : mBlockSize);
+         len += RealtimeProcess(processor, clientIn, clientOut, cnt);
 
          for (int i = 0 ; i < mNumAudioIn; i++)
          {
@@ -2350,147 +2474,183 @@ bool Effect::IsHidden()
 
 void Effect::Preview(bool dryOnly)
 {
-   if (mNumTracks==0) // nothing to preview
+   if (mNumTracks == 0) { // nothing to preview
       return;
+   }
 
-   wxWindow* FocusDialog = wxWindow::FindFocus();
-   if (gAudioIO->IsBusy())
+   if (gAudioIO->IsBusy()) {
       return;
+   }
+
+   wxWindow *FocusDialog = wxWindow::FindFocus();
+
+   double previewDuration;
+   bool isNyquist = (GetFamily().IsSameAs(NYQUISTEFFECTS_FAMILY))? true : false;
+   bool isGenerator = GetType() == EffectTypeGenerate;
 
    // Mix a few seconds of audio from all of the tracks
-   double previewLen = 6.0;
-   gPrefs->Read(wxT("/AudioIO/EffectsPreviewLen"), &previewLen);
+   double previewLen;
+   gPrefs->Read(wxT("/AudioIO/EffectsPreviewLen"), &previewLen, 6.0);
 
-   WaveTrack *mixLeft = NULL;
-   WaveTrack *mixRight = NULL;
-   double rate = mProjectRate;
-   double t0 = mT0;
-   double t1 = t0 + CalcPreviewInputLength(previewLen);
+   const double rate = mProjectRate;
 
-   if (t1 > mT1)
+   if (isNyquist && isGenerator) {
+      previewDuration = CalcPreviewInputLength(previewLen);
+   }
+   else {
+      previewDuration = wxMin(mDuration, CalcPreviewInputLength(previewLen));
+   }
+
+   double t1 = mT0 + previewDuration;
+
+   if ((t1 > mT1) && !(isNyquist && isGenerator)) {
       t1 = mT1;
+   }
 
-   // Generators can run without a selection.
-//   if (!GeneratorPreview() && (t1 <= t0))
-//      return;
-
-   bool success = ::MixAndRender(mTracks, mFactory, rate, floatSample, t0, t1,
-                                 &mixLeft, &mixRight);
-
-   if (!success) {
+   if (t1 <= mT0)
       return;
-   }
 
-   // Save the original track list
-   TrackList *saveTracks = mTracks;
+   bool success = true;
+   double oldT0 = mT0;
+   double oldT1 = mT1;
+   // Most effects should stop at t1.
+   if (!mPreviewFullSelection)
+      mT1 = t1;
 
-   // Build new tracklist from rendering tracks
-   mTracks = new TrackList();
-   mixLeft->SetSelected(true);
-   mixLeft->SetDisplay(WaveTrack::NoDisplay);
-   mTracks->Add(mixLeft);
-   if (mixRight) {
-      mixRight->SetSelected(true);
-      mTracks->Add(mixRight);
-   }
-
-   // Update track/group counts
-   CountWaveTracks();
-
-   // Reset times
-   t0 = mixLeft->GetStartTime();
-   t1 = mixLeft->GetEndTime();
-
-   double t0save = mT0;
-   double t1save = mT1;
-   mT0 = t0;
-   mT1 = t1;
-
-   // Apply effect
-
-   bool bSuccess(true);
-   if (!dryOnly) {
-      // Effect is already inited; we call Process, End, and then Init
-      // again, so the state is exactly the way it was before Preview
-      // was called.
-      mProgress = new ProgressDialog(GetName(),
-            _("Preparing preview"),
-            pdlgHideCancelButton); // Have only "Stop" button.
-      bSuccess = Process();
-      delete mProgress;
-      mProgress = NULL;
-      End();
-      Init();
-   }
-
-   // Restore original selection
-   mT0 = t0save;
-   mT1 = t1save;
-
-   if (bSuccess)
    {
-      WaveTrackArray playbackTracks;
-      WaveTrackArray recordingTracks;
-      // Probably not the same tracks post-processing, so can't rely on previous values of mixLeft & mixRight.
-      TrackListOfKindIterator iter(Track::Wave, mTracks);
-      mixLeft = (WaveTrack*)(iter.First());
-      mixRight = (WaveTrack*)(iter.Next());
-      playbackTracks.Add(mixLeft);
-      if (mixRight)
-         playbackTracks.Add(mixRight);
+      // Save the original track list
+      TrackList *saveTracks = mTracks;
+      auto cleanup = finally( [&] { mTracks = saveTracks; } );
 
-      t1 = wxMin(mixLeft->GetEndTime(), t0 + previewLen);
+      // Build NEW tracklist from rendering tracks
+      auto uTracks = std::make_unique<TrackList>();
+      mTracks = uTracks.get();
+
+      // Linear Effect preview optimised by pre-mixing to one track.
+      // Generators need to generate per track.
+      if (mIsLinearEffect && !isGenerator) {
+         WaveTrack::Holder mixLeft, mixRight;
+         MixAndRender(saveTracks, mFactory, rate, floatSample, mT0, t1, mixLeft, mixRight);
+         if (!mixLeft)
+            return;
+
+         mixLeft->Offset(-mixLeft->GetStartTime());
+         mixLeft->InsertSilence(0.0, mT0);
+         mixLeft->SetSelected(true);
+         mixLeft->SetDisplay(WaveTrack::NoDisplay);
+         mTracks->Add(std::move(mixLeft));
+         if (mixRight) {
+            mixRight->Offset(-mixRight->GetStartTime());
+            mixRight->InsertSilence(0.0, mT0);
+            mixRight->SetSelected(true);
+            mTracks->Add(std::move(mixRight));
+         }
+      }
+      else {
+         TrackListOfKindIterator iter(Track::Wave, saveTracks);
+         WaveTrack *src = (WaveTrack *) iter.First();
+         while (src)
+         {
+            if (src->GetSelected() || mPreviewWithNotSelected) {
+               auto dest = src->Copy(mT0, t1);
+               dest->InsertSilence(0.0, mT0);
+               dest->SetSelected(src->GetSelected());
+               static_cast<WaveTrack*>(dest.get())->SetDisplay(WaveTrack::NoDisplay);
+               mTracks->Add(std::move(dest));
+            }
+            src = (WaveTrack *) iter.Next();
+         }
+      }
+
+
+      // Update track/group counts
+      CountWaveTracks();
+
+      // Apply effect
+      if (!dryOnly) {
+         ProgressDialog progress(GetName(),
+                                 _("Preparing preview"),
+                                 pdlgHideCancelButton); // Have only "Stop" button.
+         SetProgress sp(mProgress, &progress);
+         mIsPreview = true;
+         success = Process();
+         mIsPreview = false;
+      }
+
+      if (success)
+      {
+         WaveTrackArray playbackTracks;
+         WaveTrackArray recordingTracks;
+
+         SelectedTrackListOfKindIterator iter(Track::Wave, mTracks);
+         WaveTrack *src = (WaveTrack *) iter.First();
+         while (src) {
+            playbackTracks.push_back(src);
+            src = (WaveTrack *) iter.Next();
+         }
+         // Some effects (Paulstretch) may need to generate more
+         // than previewLen, so take the min.
+         t1 = std::min(mT0 + previewLen, mT1);
 
 #ifdef EXPERIMENTAL_MIDI_OUT
-      NoteTrackArray empty;
+         NoteTrackArray empty;
 #endif
-      // Start audio playing
-      int token =
+         // Start audio playing
+         AudioIOStartStreamOptions options { rate };
+         int token =
          gAudioIO->StartStream(playbackTracks, recordingTracks,
 #ifdef EXPERIMENTAL_MIDI_OUT
                                empty,
 #endif
-                               rate, t0, t1);
+                               mT0, t1, options);
 
-      if (token) {
-         int previewing = eProgressSuccess;
+         if (token) {
+            int previewing = eProgressSuccess;
+            // The progress dialog must be deleted before stopping the stream
+            // to allow events to flow to the app during StopStream processing.
+            // The progress dialog blocks these events.
+            {
+               ProgressDialog progress
+               (GetName(), _("Previewing"), pdlgHideCancelButton);
 
-         mProgress = new ProgressDialog(GetName(),
-                                        _("Previewing"), pdlgHideCancelButton);
+               while (gAudioIO->IsStreamActive(token) && previewing == eProgressSuccess) {
+                  ::wxMilliSleep(100);
+                  previewing = progress.Update(gAudioIO->GetStreamTime() - mT0, t1 - mT0);
+               }
+            }
 
-         while (gAudioIO->IsStreamActive(token) && previewing == eProgressSuccess) {
-            ::wxMilliSleep(100);
-            previewing = mProgress->Update(gAudioIO->GetStreamTime() - t0, t1 - t0);
+            gAudioIO->StopStream();
+
+            while (gAudioIO->IsBusy()) {
+               ::wxMilliSleep(100);
+            }
          }
-         gAudioIO->StopStream();
-
-         while (gAudioIO->IsBusy()) {
-            ::wxMilliSleep(100);
+         else {
+            wxMessageBox(_("Error opening sound device. Try changing the audio host, playback device and the project sample rate."),
+                         _("Error"), wxOK | wxICON_EXCLAMATION, FocusDialog);
          }
-
-         delete mProgress;
-         mProgress = NULL;
       }
-      else {
-         wxMessageBox(_("Error while opening sound device. Please check the playback device settings and the project sample rate."),
-                      _("Error"), wxOK | wxICON_EXCLAMATION, FocusDialog);
+      
+      if (FocusDialog) {
+         FocusDialog->SetFocus();
       }
+      
+      mOutputTracks.reset();
    }
 
-   if (FocusDialog) {
-      FocusDialog->SetFocus();
+   mT0 = oldT0;
+   mT1 = oldT1;
+
+   // Effect is already inited; we call Process, End, and then Init
+   // again, so the state is exactly the way it was before Preview
+   // was called.
+   if (!dryOnly) {
+      End();
+      Init();
    }
-
-   delete mOutputTracks;
-   mOutputTracks = NULL;
-
-   mTracks->Clear(true); // true => delete the tracks
-   delete mTracks;
-
-   mTracks = saveTracks;
 }
 
-BEGIN_EVENT_TABLE(EffectDialog, wxDialog)
+BEGIN_EVENT_TABLE(EffectDialog, wxDialogWrapper)
    EVT_BUTTON(wxID_OK, EffectDialog::OnOk)
 END_EVENT_TABLE()
 
@@ -2499,7 +2659,7 @@ EffectDialog::EffectDialog(wxWindow * parent,
                            int type,
                            int flags,
                            int additionalButtons)
-: wxDialog(parent, wxID_ANY, title, wxDefaultPosition, wxDefaultSize, flags)
+: wxDialogWrapper(parent, wxID_ANY, title, wxDefaultPosition, wxDefaultSize, flags)
 {
    mType = type;
    mAdditionalButtons = additionalButtons;
@@ -2574,7 +2734,7 @@ void EffectDialog::OnOk(wxCommandEvent & WXUNUSED(evt))
    // just our Effects dialogs.  So, this is a only temporary workaround
    // for legacy effects that disable the OK button.  Hopefully this has
    // been corrected in wx3.
-   if (FindWindowById(wxID_OK)->IsEnabled() && Validate() && TransferDataFromWindow())
+   if (FindWindow(wxID_OK)->IsEnabled() && Validate() && TransferDataFromWindow())
    {
       EndModal(true);
    }
@@ -2588,11 +2748,11 @@ void EffectDialog::OnOk(wxCommandEvent & WXUNUSED(evt))
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-class EffectPanel : public wxPanel
+class EffectPanel final : public wxPanelWrapper
 {
 public:
    EffectPanel(wxWindow *parent)
-   :  wxPanel(parent)
+   :  wxPanelWrapper(parent)
    {
       // This fools NVDA into not saying "Panel" when the dialog gets focus
       SetName(wxT("\a"));
@@ -2609,7 +2769,13 @@ public:
    // wxWindow implementation
    // ============================================================================
 
-   virtual bool AcceptsFocus() const
+   bool AcceptsFocus() const override
+   {
+      return mAcceptsFocus;
+   }
+
+   // So that wxPanel is not included in Tab traversal, when required - see wxWidgets bug 15581
+   bool AcceptsFocusFromKeyboard() const override
    {
       return mAcceptsFocus;
    }
@@ -2634,7 +2800,7 @@ private:
 
 #include "../../images/Effect.h"
 
-BEGIN_EVENT_TABLE(EffectUIHost, wxDialog)
+BEGIN_EVENT_TABLE(EffectUIHost, wxDialogWrapper)
    EVT_INIT_DIALOG(EffectUIHost::OnInitDialog)
    EVT_ERASE_BACKGROUND(EffectUIHost::OnErase)
    EVT_PAINT(EffectUIHost::OnPaint)
@@ -2660,10 +2826,15 @@ END_EVENT_TABLE()
 EffectUIHost::EffectUIHost(wxWindow *parent,
                            Effect *effect,
                            EffectUIClientInterface *client)
-:  wxDialog(parent, wxID_ANY, effect->GetName(),
+:  wxDialogWrapper(parent, wxID_ANY, effect->GetName(),
             wxDefaultPosition, wxDefaultSize,
             wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxMINIMIZE_BOX | wxMAXIMIZE_BOX)
 {
+#if defined(__WXMAC__)
+   // Make sure the effect window actually floats above the main window
+   [[((NSView *)GetHandle()) window] setLevel:NSFloatingWindowLevel];
+#endif
+
    SetName(effect->GetName());
    SetExtraStyle(wxWS_EX_VALIDATE_RECURSIVELY);
 
@@ -2700,37 +2871,6 @@ EffectUIHost::~EffectUIHost()
 // wxWindow implementation
 // ============================================================================
 
-#if defined(__WXMAC__)
-
-// As mentioned below, we want to manipulate the window attributes, but doing
-// so causes extra events to fire and those events lead to the rebuilding of
-// the menus.  Unfortunately, if this happens when a modal dialog is displayed
-// the menus become disabled until the menubar is completely rebuilt, like when
-// leaving preferecnes.
-//
-// So, we only do this when NOT displaying a modal dialog since that's really
-// only when it is needed.
-
-bool EffectUIHost::Show(bool show)
-{
-   if (!mIsModal)
-   {
-      // We want the effects windows on the Mac to float above the project window
-      // but still have normal modal dialogs appear above the effects windows and
-      // not let the effect windows fall behind the project window.
-      //
-      // This seems to accomplish that, but time will be the real judge.
-      WindowRef windowRef = (WindowRef) MacGetWindowRef();
-      WindowGroupRef parentGroup = GetWindowGroup((WindowRef) ((wxFrame *)wxGetTopLevelParent(mParent))->MacGetWindowRef());
-      ChangeWindowGroupAttributes(parentGroup, kWindowGroupAttrSharedActivation, kWindowGroupAttrMoveTogether);
-      SetWindowGroup(windowRef, parentGroup);
-   }
-   mIsModal = false;
-
-   return wxDialog::Show(show);
-}
-#endif
-
 bool EffectUIHost::TransferDataToWindow()
 {
    return mEffect->TransferDataToWindow();
@@ -2747,18 +2887,15 @@ bool EffectUIHost::TransferDataFromWindow()
 
 int EffectUIHost::ShowModal()
 {
-#if defined(__WXMAC__)
-   // See explanation in EffectUIHost::Show()
-   mIsModal = true;
-#endif
-
 #if defined(__WXMSW__)
    // Swap the Close and Apply buttons
    wxSizer *sz = mApplyBtn->GetContainingSizer();
-   wxButton *apply = new wxButton(mApplyBtn->GetParent(), wxID_APPLY);
+   wxASSERT(mApplyBtn->GetParent()); // To justify safenew
+   wxButton *apply = safenew wxButton(mApplyBtn->GetParent(), wxID_APPLY);
    sz->Replace(mCloseBtn, apply);
    sz->Replace(mApplyBtn, mCloseBtn);
-   delete mApplyBtn;
+   sz->Layout();
+   mApplyBtn->Destroy();
    mApplyBtn = apply;
    mApplyBtn->SetDefault();
    mApplyBtn->SetLabel(wxGetStockLabel(wxID_OK, 0));
@@ -2770,7 +2907,7 @@ int EffectUIHost::ShowModal()
 
    Layout();
 
-   return wxDialog::ShowModal();
+   return wxDialogWrapper::ShowModal();
 }
 
 // ============================================================================
@@ -2779,195 +2916,208 @@ int EffectUIHost::ShowModal()
 
 bool EffectUIHost::Initialize()
 {
-   wxBoxSizer *vs = new wxBoxSizer(wxVERTICAL);
-   wxBoxSizer *hs = new wxBoxSizer(wxHORIZONTAL);
-
-   EffectPanel *w = new EffectPanel(this);
-
-   // Try to give the window a sensible default/minimum size
-   w->SetMinSize(wxSize(wxMax(600, mParent->GetSize().GetWidth() * 2 / 3),
-                        mParent->GetSize().GetHeight() / 2));
-
-   mDisableTransport = !gAudioIO->IsAvailable(mProject);
-   mPlaying = gAudioIO->IsStreamActive(); // not exactly right, but will suffice
-   mCapturing = gAudioIO->IsStreamActive() && gAudioIO->GetNumCaptureChannels() > 0;
-
-   if (!mClient->PopulateUI(w))
+   EffectPanel *w = safenew EffectPanel(this);
    {
-      return false;
-   }
+      auto vs = std::make_unique<wxBoxSizer>(wxVERTICAL);
+      {
+         auto hs = std::make_unique<wxBoxSizer>(wxHORIZONTAL);
 
-   hs->Add(w, 1, wxEXPAND);
-   vs->Add(hs, 1, wxEXPAND);
+         // Try to give the window a sensible default/minimum size
+         w->SetMinSize(wxSize(wxMax(600, mParent->GetSize().GetWidth() * 2 / 3),
+            mParent->GetSize().GetHeight() / 2));
 
-   wxPanel *bar = new wxPanel(this, wxID_ANY);
+         mDisableTransport = !gAudioIO->IsAvailable(mProject);
+         mPlaying = gAudioIO->IsStreamActive(); // not exactly right, but will suffice
+         mCapturing = gAudioIO->IsStreamActive() && gAudioIO->GetNumCaptureChannels() > 0;
 
-   // This fools NVDA into not saying "Panel" when the dialog gets focus
-   bar->SetName(wxT("\a"));
-   bar->SetLabel(wxT("\a"));
+         if (!mClient->PopulateUI(w))
+         {
+            return false;
+         }
 
-   wxBoxSizer *bs = new wxBoxSizer(wxHORIZONTAL);
+         hs->Add(w, 1, wxEXPAND);
+         vs->Add(hs.release(), 1, wxEXPAND);
+      }
 
-   mSupportsRealtime = mEffect->SupportsRealtime();
-   mIsGUI = mClient->IsGraphicalUI();
-   mIsBatch = mEffect->IsBatchProcessing();
+      wxPanel *buttonPanel = safenew wxPanelWrapper(this, wxID_ANY);
+      wxPanel *const bar = safenew wxPanelWrapper(buttonPanel, wxID_ANY);
 
-   wxBitmapButton *bb;
+      // This fools NVDA into not saying "Panel" when the dialog gets focus
+      bar->SetName(wxT("\a"));
+      bar->SetLabel(wxT("\a"));
 
-   int margin = 0;
+      {
+         auto bs = std::make_unique<wxBoxSizer>(wxHORIZONTAL);
+
+         mSupportsRealtime = mEffect->SupportsRealtime();
+         mIsGUI = mClient->IsGraphicalUI();
+         mIsBatch = mEffect->IsBatchProcessing();
+
+         wxBitmapButton *bb;
+
+         int margin = 0;
 
 #if defined(__WXMAC__)
-   margin = 3; // I'm sure it's needed because of the order things are created...
+         margin = 3; // I'm sure it's needed because of the order things are created...
 #endif   
 
-   if (!mIsGUI)
-   {
-      mMenuBtn = new wxButton(bar, kMenuID, _("&Manage"));
-      bs->Add(mMenuBtn, 0, wxALIGN_CENTER | wxTOP | wxBOTTOM, margin);
-   }
-   else
-   {
-      mMenuBtn = new wxBitmapButton(bar, kMenuID, CreateBitmap(effect_menu_xpm, true, false));
-#if defined(__WXMAC__)
-      mMenuBtn->SetName(_("&Manage"));
-#else
-      mMenuBtn->SetLabel(_("&Manage"));
-#endif
-      bs->Add(mMenuBtn);
-   }
-   mMenuBtn->SetToolTip(_("Manage presets and options"));
-
-   bs->Add(5, 5);
-
-   if (!mIsBatch)
-   {
-      if (!mIsGUI)
-      {
-         if (mSupportsRealtime)
-         {
-            mPlayToggleBtn = new wxButton(bar, kPlayID, _("Start &Playback"));
-            mPlayToggleBtn->SetToolTip(_("Start and stop playback"));
-            bs->Add(mPlayToggleBtn, 0, wxALIGN_CENTER | wxTOP | wxBOTTOM, margin);
-         }
-         else if (mEffect->GetType() != EffectTypeAnalyze)
-         {
-            mPlayToggleBtn = new wxButton(bar, kPlayID, _("&Preview"));
-            mPlayToggleBtn->SetToolTip(_("Preview effect"));
-            bs->Add(mPlayToggleBtn, 0, wxALIGN_CENTER | wxTOP | wxBOTTOM, margin);
-         }
-      }
-      else
-      {
-         mPlayBM = CreateBitmap(effect_play_xpm, true, false);
-         mPlayDisabledBM = CreateBitmap(effect_play_disabled_xpm, true, false);
-         mStopBM = CreateBitmap(effect_stop_xpm, true, false);
-         mStopDisabledBM = CreateBitmap(effect_stop_disabled_xpm, true, false);
-         bb = new wxBitmapButton(bar, kPlayID, mPlayBM);
-         bb->SetBitmapDisabled(mPlayDisabledBM);
-         mPlayBtn = bb;
-         bs->Add(mPlayBtn);
-         if (!mSupportsRealtime)
-         {
-            mPlayBtn->SetToolTip(_("Preview effect"));
-#if defined(__WXMAC__)
-            mPlayBtn->SetName(_("Preview effect"));
-#else
-            mPlayBtn->SetLabel(_("&Preview effect"));
-#endif
-         }
-      }
-
-      if (mSupportsRealtime)
-      {
          if (!mIsGUI)
          {
-            mRewindBtn = new wxButton(bar, kRewindID, _("Skip &Backward"));
-            bs->Add(mRewindBtn, 0, wxALIGN_CENTER | wxTOP | wxBOTTOM, margin);
+            wxASSERT(bar); // To justify safenew
+            mMenuBtn = safenew wxButton(bar, kMenuID, _("&Manage"));
+            bs->Add(mMenuBtn, 0, wxALIGN_CENTER | wxTOP | wxBOTTOM, margin);
          }
          else
          {
-            bb = new wxBitmapButton(bar, kRewindID, CreateBitmap(effect_rewind_xpm, true, true));
-            bb->SetBitmapDisabled(CreateBitmap(effect_rewind_disabled_xpm, true, true));
-            mRewindBtn = bb;
+            wxASSERT(bar); // To justify safenew
+            mMenuBtn = safenew wxBitmapButton(bar, kMenuID, CreateBitmap(effect_menu_xpm, true, false));
 #if defined(__WXMAC__)
-            mRewindBtn->SetName(_("Skip &Backward"));
+            mMenuBtn->SetName(_("&Manage"));
 #else
-            mRewindBtn->SetLabel(_("Skip &Backward"));
+            mMenuBtn->SetLabel(_("&Manage"));
 #endif
-            bs->Add(mRewindBtn);
+            bs->Add(mMenuBtn);
          }
-         mRewindBtn->SetToolTip(_("Skip backward"));
-
-         if (!mIsGUI)
-         {
-            mFFwdBtn = new wxButton(bar, kFFwdID, _("Skip &Forward"));
-            bs->Add(mFFwdBtn, 0, wxALIGN_CENTER | wxTOP | wxBOTTOM, margin);
-         }
-         else
-         {
-            bb = new wxBitmapButton(bar, kFFwdID, CreateBitmap(effect_ffwd_xpm, true, true));
-            bb->SetBitmapDisabled(CreateBitmap(effect_ffwd_disabled_xpm, true, true));
-            mFFwdBtn = bb;
-#if defined(__WXMAC__)
-            mFFwdBtn->SetName(_("Skip &Foreward"));
-#else
-            mFFwdBtn->SetLabel(_("Skip &Foreward"));
-#endif
-            bs->Add(mFFwdBtn);
-         }
-         mFFwdBtn->SetToolTip(_("Skip forward"));
+         mMenuBtn->SetToolTip(_("Manage presets and options"));
 
          bs->Add(5, 5);
 
-         mEnableCb = new wxCheckBox(bar, kEnableID, _("&Enable"));
-         mEnableCb->SetValue(mEnabled);
-         mEnableCb->SetName(_("Enable"));
-         bs->Add(mEnableCb, 0, wxALIGN_CENTER | wxTOP | wxBOTTOM, margin);
+         if (!mIsBatch)
+         {
+            if (!mIsGUI)
+            {
+               if (mSupportsRealtime)
+               {
+                  wxASSERT(bar); // To justify safenew
+                  mPlayToggleBtn = safenew wxButton(bar, kPlayID, _("Start &Playback"));
+                  mPlayToggleBtn->SetToolTip(_("Start and stop playback"));
+                  bs->Add(mPlayToggleBtn, 0, wxALIGN_CENTER | wxTOP | wxBOTTOM, margin);
+               }
+               else if (mEffect->GetType() != EffectTypeAnalyze)
+               {
+                  wxASSERT(bar); // To justify safenew
+                  mPlayToggleBtn = safenew wxButton(bar, kPlayID, _("&Preview"));
+                  mPlayToggleBtn->SetToolTip(_("Preview effect"));
+                  bs->Add(mPlayToggleBtn, 0, wxALIGN_CENTER | wxTOP | wxBOTTOM, margin);
+               }
+            }
+            else
+            {
+               mPlayBM = CreateBitmap(effect_play_xpm, true, false);
+               mPlayDisabledBM = CreateBitmap(effect_play_disabled_xpm, true, false);
+               mStopBM = CreateBitmap(effect_stop_xpm, true, false);
+               mStopDisabledBM = CreateBitmap(effect_stop_disabled_xpm, true, false);
+               wxASSERT(bar); // To justify safenew
+               bb = safenew wxBitmapButton(bar, kPlayID, mPlayBM);
+               bb->SetBitmapDisabled(mPlayDisabledBM);
+               mPlayBtn = bb;
+               bs->Add(mPlayBtn);
+               if (!mSupportsRealtime)
+               {
+                  mPlayBtn->SetToolTip(_("Preview effect"));
+#if defined(__WXMAC__)
+                  mPlayBtn->SetName(_("Preview effect"));
+#else
+                  mPlayBtn->SetLabel(_("&Preview effect"));
+#endif
+               }
+            }
+
+            if (mSupportsRealtime)
+            {
+               if (!mIsGUI)
+               {
+                  wxASSERT(bar); // To justify safenew
+                  mRewindBtn = safenew wxButton(bar, kRewindID, _("Skip &Backward"));
+                  bs->Add(mRewindBtn, 0, wxALIGN_CENTER | wxTOP | wxBOTTOM, margin);
+               }
+               else
+               {
+                  wxASSERT(bar); // To justify safenew
+                  bb = safenew wxBitmapButton(bar, kRewindID, CreateBitmap(effect_rewind_xpm, true, true));
+                  bb->SetBitmapDisabled(CreateBitmap(effect_rewind_disabled_xpm, true, true));
+                  mRewindBtn = bb;
+#if defined(__WXMAC__)
+                  mRewindBtn->SetName(_("Skip &Backward"));
+#else
+                  mRewindBtn->SetLabel(_("Skip &Backward"));
+#endif
+                  bs->Add(mRewindBtn);
+               }
+               mRewindBtn->SetToolTip(_("Skip backward"));
+
+               if (!mIsGUI)
+               {
+                  wxASSERT(bar); // To justify safenew
+                  mFFwdBtn = safenew wxButton(bar, kFFwdID, _("Skip &Forward"));
+                  bs->Add(mFFwdBtn, 0, wxALIGN_CENTER | wxTOP | wxBOTTOM, margin);
+               }
+               else
+               {
+                  wxASSERT(bar); // To justify safenew
+                  bb = safenew wxBitmapButton(bar, kFFwdID, CreateBitmap(effect_ffwd_xpm, true, true));
+                  bb->SetBitmapDisabled(CreateBitmap(effect_ffwd_disabled_xpm, true, true));
+                  mFFwdBtn = bb;
+#if defined(__WXMAC__)
+                  mFFwdBtn->SetName(_("Skip &Foreward"));
+#else
+                  mFFwdBtn->SetLabel(_("Skip &Foreward"));
+#endif
+                  bs->Add(mFFwdBtn);
+               }
+               mFFwdBtn->SetToolTip(_("Skip forward"));
+
+               bs->Add(5, 5);
+
+               mEnableCb = safenew wxCheckBox(bar, kEnableID, _("&Enable"));
+               mEnableCb->SetValue(mEnabled);
+               mEnableCb->SetName(_("Enable"));
+               bs->Add(mEnableCb, 0, wxALIGN_CENTER | wxTOP | wxBOTTOM, margin);
+            }
+         }
+
+         bar->SetSizerAndFit(bs.release());
       }
-   }
 
-   bar->SetSizerAndFit(bs);
-
-   long buttons = eApplyButton;
-   if (!mIsBatch)
-   {
-      buttons += eCloseButton;
+      long buttons = eApplyButton + eCloseButton;
       if (mEffect->mUIDebug)
       {
          buttons += eDebugButton;
       }
+
+      buttonPanel->SetSizer(CreateStdButtonSizer(buttonPanel, buttons, bar).release());
+      vs->Add(buttonPanel, 0, wxEXPAND);
+
+      SetSizer(vs.release());
    }
 
-   wxSizer *s = CreateStdButtonSizer(this, buttons, bar);
-   vs->Add(s, 0, wxEXPAND | wxALIGN_CENTER_VERTICAL);
-
-   SetSizer(vs);
    Layout();
    Fit();
    Center();
 
-   mApplyBtn = (wxButton *) FindWindowById(wxID_APPLY);
-   mCloseBtn = (wxButton *) FindWindowById(wxID_CANCEL);
+   mApplyBtn = (wxButton *) FindWindow(wxID_APPLY);
+   mCloseBtn = (wxButton *) FindWindow(wxID_CANCEL);
 
    UpdateControls();
 
    w->SetAccept(!mIsGUI);
-   (!mIsGUI ? w : FindWindowById(wxID_APPLY))->SetFocus();
+   (!mIsGUI ? w : FindWindow(wxID_APPLY))->SetFocus();
  
    LoadUserPresets();
 
    InitializeRealtime();
 
+   SetMinSize(GetSize());
    return true;
 }
 
 void EffectUIHost::OnInitDialog(wxInitDialogEvent & evt)
 {
    // Do default handling
-   wxDialog::OnInitDialog(evt);
+   wxDialogWrapper::OnInitDialog(evt);
 
 #if wxCHECK_VERSION(3, 0, 0)
-#warning "check to see if this still needed in wx3"
+//#warning "check to see if this still needed in wx3"
 #endif
 
    // Pure hackage coming down the pike...
@@ -2993,15 +3143,13 @@ void EffectUIHost::OnPaint(wxPaintEvent & WXUNUSED(evt))
 {
    wxPaintDC dc(this);
 
-#if defined(__WXGTK__)
-   dc.SetBackground(wxBrush(wxSystemSettings::GetColour(wxSYS_COLOUR_3DFACE)));
-#endif
-
    dc.Clear();
 }
 
 void EffectUIHost::OnClose(wxCloseEvent & WXUNUSED(evt))
 {
+   DoCancel();
+
    CleanupRealtime();
 
    Hide();
@@ -3019,15 +3167,23 @@ void EffectUIHost::OnApply(wxCommandEvent & evt)
    // just our Effects dialogs.  So, this is a only temporary workaround
    // for legacy effects that disable the OK button.  Hopefully this has
    // been corrected in wx3.
-   if (!FindWindowById(wxID_APPLY)->IsEnabled())
+   if (!FindWindow(wxID_APPLY)->IsEnabled())
    {
       return;
    }
 
+   // Honor the "select all if none" preference...a little hackish, but whatcha gonna do...
    if (!mIsBatch && mEffect->GetType() != EffectTypeGenerate && mProject->mViewInfo.selectedRegion.isPoint())
    {
-      wxMessageBox(_("You must select audio in the project window."));
-      return;
+      auto flags = AlwaysEnabledFlag;
+      bool allowed = mProject->TryToMakeActionAllowed(flags,
+                                                      WaveTracksSelectedFlag | TimeSelectedFlag,
+                                                      WaveTracksSelectedFlag | TimeSelectedFlag);
+      if (!allowed)
+      {
+         wxMessageBox(_("You must select audio in the project window."));
+         return;
+      }
    }
 
    if (!mClient->ValidateUI())
@@ -3045,6 +3201,8 @@ void EffectUIHost::OnApply(wxCommandEvent & evt)
 
    if (IsModal())
    {
+      mDismissed = true;
+
       EndModal(true);
 
       Close();
@@ -3063,20 +3221,23 @@ void EffectUIHost::OnApply(wxCommandEvent & evt)
    return;
 }
 
+void EffectUIHost::DoCancel()
+{
+   if (!mDismissed) {
+      mEffect->mUIResultID = wxID_CANCEL;
+
+      if (IsModal())
+         EndModal(false);
+      else
+         Hide();
+
+      mDismissed = true;
+   }
+}
+
 void EffectUIHost::OnCancel(wxCommandEvent & evt)
 {
-   mEffect->mUIResultID = evt.GetId();
-
-   if (IsModal())
-   {
-      EndModal(false);
-
-      Close();
-
-      return;
-   }
-
-   Hide();
+   DoCancel();
 
    Close();
 
@@ -3094,82 +3255,86 @@ void EffectUIHost::OnDebug(wxCommandEvent & evt)
 
 void EffectUIHost::OnMenu(wxCommandEvent & WXUNUSED(evt))
 {
-   wxMenu *menu = new wxMenu();
-   wxMenu *sub;
+   wxMenu menu;
 
    LoadUserPresets();
 
    if (mUserPresets.GetCount() == 0)
    {
-      menu->Append(kUserPresetsDummyID, _("User Presets"))->Enable(false);
+      menu.Append(kUserPresetsDummyID, _("User Presets"))->Enable(false);
    }
    else
    {
-      sub = new wxMenu();
+      auto sub = std::make_unique<wxMenu>();
       for (size_t i = 0, cnt = mUserPresets.GetCount(); i < cnt; i++)
       {
          sub->Append(kUserPresetsID + i, mUserPresets[i]);
       }
-      menu->Append(0, _("User Presets"), sub);
+      menu.Append(0, _("User Presets"), sub.release());
    }
 
-   wxArrayString factory = mEffect->GetFactoryPresets();
-
-   sub = new wxMenu();
-   sub->Append(kDefaultsID, _("Defaults"));
-   if (factory.GetCount() > 0)
-   {
-      sub->AppendSeparator();
-      for (size_t i = 0, cnt = factory.GetCount(); i < cnt; i++)
-      {
-         wxString label = factory[i];
-         if (label.IsEmpty())
-         {
-            label = _("None");
-         }
-
-         sub->Append(kFactoryPresetsID + i, label);
-      }
-   }
-   menu->Append(0, _("Factory Presets"), sub);
+   menu.Append(kSaveAsID, _("Save Preset..."));
 
    if (mUserPresets.GetCount() == 0)
    {
-      menu->Append(kDeletePresetDummyID, _("Delete Preset"))->Enable(false);
+      menu.Append(kDeletePresetDummyID, _("Delete Preset"))->Enable(false);
    }
    else
    {
-      sub = new wxMenu();
+      auto sub = std::make_unique<wxMenu>();
       for (size_t i = 0, cnt = mUserPresets.GetCount(); i < cnt; i++)
       {
          sub->Append(kDeletePresetID + i, mUserPresets[i]);
       }
-      menu->Append(0, _("Delete Preset"), sub);
+      menu.Append(0, _("Delete Preset"), sub.release());
    }
 
-   menu->AppendSeparator();
-   menu->Append(kSaveAsID, _("Save As..."));
-   menu->AppendSeparator();
-   menu->Append(kImportID, _("Import..."))->Enable(mClient->CanExportPresets());
-   menu->Append(kExportID, _("Export..."))->Enable(mClient->CanExportPresets());
-   menu->AppendSeparator();
-   menu->Append(kOptionsID, _("Options..."))->Enable(mClient->HasOptions());
-   menu->AppendSeparator();
+   menu.AppendSeparator();
 
-   sub = new wxMenu();
+   wxArrayString factory = mEffect->GetFactoryPresets();
 
-   sub->Append(kDummyID, wxString::Format(_("Type: %s"), mEffect->GetFamily().c_str()));
-   sub->Append(kDummyID, wxString::Format(_("Name: %s"), mEffect->GetName().c_str()));
-   sub->Append(kDummyID, wxString::Format(_("Version: %s"), mEffect->GetVersion().c_str()));
-   sub->Append(kDummyID, wxString::Format(_("Vendor: %s"), mEffect->GetVendor().c_str()));
-   sub->Append(kDummyID, wxString::Format(_("Description: %s"), mEffect->GetDescription().c_str()));
+   {
+      auto sub = std::make_unique<wxMenu>();
+      sub->Append(kDefaultsID, _("Defaults"));
+      if (factory.GetCount() > 0)
+      {
+         sub->AppendSeparator();
+         for (size_t i = 0, cnt = factory.GetCount(); i < cnt; i++)
+         {
+            wxString label = factory[i];
+            if (label.IsEmpty())
+            {
+               label = _("None");
+            }
 
-   menu->Append(0, _("About"), sub);
+            sub->Append(kFactoryPresetsID + i, label);
+         }
+      }
+      menu.Append(0, _("Factory Presets"), sub.release());
+   }
 
-   wxRect r = FindWindowById(kMenuID)->GetParent()->GetRect();
-   PopupMenu(menu, wxPoint(r.GetLeft(), r.GetBottom()));
+   menu.AppendSeparator();
+   menu.Append(kImportID, _("Import..."))->Enable(mClient->CanExportPresets());
+   menu.Append(kExportID, _("Export..."))->Enable(mClient->CanExportPresets());
+   menu.AppendSeparator();
+   menu.Append(kOptionsID, _("Options..."))->Enable(mClient->HasOptions());
+   menu.AppendSeparator();
 
-   delete menu;
+   {
+      auto sub = std::make_unique<wxMenu>();
+
+      sub->Append(kDummyID, wxString::Format(_("Type: %s"), mEffect->GetFamily().c_str()));
+      sub->Append(kDummyID, wxString::Format(_("Name: %s"), mEffect->GetName().c_str()));
+      sub->Append(kDummyID, wxString::Format(_("Version: %s"), mEffect->GetVersion().c_str()));
+      sub->Append(kDummyID, wxString::Format(_("Vendor: %s"), mEffect->GetVendor().c_str()));
+      sub->Append(kDummyID, wxString::Format(_("Description: %s"), mEffect->GetDescription().c_str()));
+
+      menu.Append(0, _("About"), sub.release());
+   }
+
+   wxWindow *btn = FindWindow(kMenuID);
+   wxRect r = btn->GetRect();
+   btn->PopupMenu(&menu, r.GetLeft(), r.GetBottom());
 }
 
 void EffectUIHost::OnEnable(wxCommandEvent & WXUNUSED(evt))
@@ -3178,6 +3343,16 @@ void EffectUIHost::OnEnable(wxCommandEvent & WXUNUSED(evt))
 
    if (mEnabled)
    {
+      if (!mClient->ValidateUI()) {
+         // If we're previewing we should still be able to stop playback
+         // so don't disable transport buttons.
+         //   mEffect->EnableApply(false);   // currently this would also disable transport buttons.
+         // The preferred behaviour is currently undecided, so for now
+         // just disallow enabling until settings are valid.
+         mEnabled = false;
+         mEnableCb->SetValue(mEnabled);
+         return;
+      }
       mEffect->RealtimeResume();
    }
    else
@@ -3230,7 +3405,7 @@ void EffectUIHost::OnPlay(wxCommandEvent & WXUNUSED(evt))
 
       mProject->GetControlToolBar()->PlayPlayRegion
          (SelectedRegion(mPlayPos, mRegion.t1()),
-          mProject->GetDefaultPlayOptions());
+          mProject->GetDefaultPlayOptions(), PlayMode::normalPlay);
    }
 }
 
@@ -3368,24 +3543,26 @@ void EffectUIHost::OnSaveAs(wxCommandEvent & WXUNUSED(evt))
 {
    wxTextCtrl *text;
    wxString name;
-   wxDialog dlg(this, wxID_ANY, wxString(_("Save Preset")));
+   wxDialogWrapper dlg(this, wxID_ANY, wxString(_("Save Preset")));
 
    ShuttleGui S(&dlg, eIsCreating);
 
    S.StartPanel();
    {
-      S.StartVerticalLay(0);
+      S.StartVerticalLay(1);
       {
          S.StartHorizontalLay(wxALIGN_LEFT, 0);
          {
             text = S.AddTextBox(_("Preset name:"), name, 30);
          }
          S.EndHorizontalLay();
+         S.SetBorder(10);
          S.AddStandardButtons();
       }
       S.EndVerticalLay();
    }
    S.EndPanel();
+
    dlg.SetSize(dlg.GetSizer()->GetMinSize());
    dlg.Center();
 
@@ -3399,16 +3576,39 @@ void EffectUIHost::OnSaveAs(wxCommandEvent & WXUNUSED(evt))
       }
 
       name = text->GetValue();
-      if (mUserPresets.Index(name) == wxNOT_FOUND)
+      if (name.IsEmpty())
       {
-         mEffect->SaveUserPreset(mEffect->GetUserPresetsGroup(name));
-         LoadUserPresets();
-         break;
+         wxMessageDialog md(this,
+                            _("You must specify a name"),
+                            _("Save Preset"));
+         md.Center();
+         md.ShowModal();
+         continue;
       }
 
-      wxMessageBox(_("Preset already exists"),
-                     _("Save Preset"),
-                     wxICON_EXCLAMATION);
+      if (mUserPresets.Index(name) != wxNOT_FOUND)
+      {
+         wxMessageDialog md(this,
+                            _("Preset already exists.\n\nReplace?"),
+                            _("Save Preset"),
+                            wxYES_NO | wxCANCEL | wxICON_EXCLAMATION);
+         md.Center();
+         int choice = md.ShowModal();
+         if (choice == wxID_CANCEL)
+         {
+            break;
+         }
+
+         if (choice == wxID_NO)
+         {
+            continue;
+         }
+      }
+
+      mEffect->SaveUserPreset(mEffect->GetUserPresetsGroup(name));
+      LoadUserPresets();
+
+      break;
    }
 
    return;
@@ -3620,7 +3820,7 @@ enum
    ID_Type = 10000
 };
 
-BEGIN_EVENT_TABLE(EffectPresetsDialog, wxDialog)
+BEGIN_EVENT_TABLE(EffectPresetsDialog, wxDialogWrapper)
    EVT_CHOICE(ID_Type, EffectPresetsDialog::OnType)
    EVT_LISTBOX_DCLICK(wxID_ANY, EffectPresetsDialog::OnOk)
    EVT_BUTTON(wxID_OK, EffectPresetsDialog::OnOk)
@@ -3628,7 +3828,7 @@ BEGIN_EVENT_TABLE(EffectPresetsDialog, wxDialog)
 END_EVENT_TABLE()
 
 EffectPresetsDialog::EffectPresetsDialog(wxWindow *parent, Effect *effect)
-:  wxDialog(parent, wxID_ANY, wxString(_("Select Preset")))
+:  wxDialogWrapper(parent, wxID_ANY, wxString(_("Select Preset")))
 {
    ShuttleGui S(this, eIsCreating);
    S.StartVerticalLay();

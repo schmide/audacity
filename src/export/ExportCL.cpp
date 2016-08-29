@@ -12,36 +12,42 @@
 **********************************************************************/
 
 #include "../Audacity.h"
+#include "ExportCL.h"
 #include "../Project.h"
 
 #include <wx/button.h>
 #include <wx/combobox.h>
 #include <wx/log.h>
+#include <wx/msgdlg.h>
 #include <wx/process.h>
 #include <wx/sizer.h>
 #include <wx/textctrl.h>
 #include <FileDialog.h>
 #include "Export.h"
-#include "ExportCL.h"
 
 #include "../Mix.h"
 #include "../Prefs.h"
+#include "../ShuttleGui.h"
 #include "../Internat.h"
 #include "../float_cast.h"
 #include "../widgets/FileHistory.h"
+
+#include "../Track.h"
 
 
 //----------------------------------------------------------------------------
 // ExportCLOptions
 //----------------------------------------------------------------------------
 
-class ExportCLOptions : public wxDialog
+class ExportCLOptions final : public wxPanelWrapper
 {
 public:
+   ExportCLOptions(wxWindow *parent, int format);
+   virtual ~ExportCLOptions();
 
-   ExportCLOptions(wxWindow *parent);
    void PopulateOrExchange(ShuttleGui & S);
-   void OnOK(wxCommandEvent & event);
+   bool TransferDataToWindow();
+   bool TransferDataFromWindow();
 
    void OnBrowse(wxCommandEvent & event);
 
@@ -54,16 +60,14 @@ private:
 
 #define ID_BROWSE 5000
 
-BEGIN_EVENT_TABLE(ExportCLOptions, wxDialog)
-   EVT_BUTTON(wxID_OK, ExportCLOptions::OnOK)
+BEGIN_EVENT_TABLE(ExportCLOptions, wxPanelWrapper)
    EVT_BUTTON(ID_BROWSE, ExportCLOptions::OnBrowse)
 END_EVENT_TABLE()
 
 ///
 ///
-ExportCLOptions::ExportCLOptions(wxWindow *parent)
-:  wxDialog(parent, wxID_ANY,
-            wxString(_("Specify Command Line Encoder")))
+ExportCLOptions::ExportCLOptions(wxWindow *parent, int WXUNUSED(format))
+:  wxPanelWrapper(parent, wxID_ANY)
 {
    mHistory.Load(*gPrefs, wxT("/FileFormats/ExternalProgramHistory"));
 
@@ -77,8 +81,16 @@ ExportCLOptions::ExportCLOptions(wxWindow *parent)
                              false);
 
    ShuttleGui S(this, eIsCreatingFromPrefs);
-
    PopulateOrExchange(S);
+
+   TransferDataToWindow();
+
+   parent->Layout();
+}
+
+ExportCLOptions::~ExportCLOptions()
+{
+   TransferDataFromWindow();
 }
 
 ///
@@ -93,10 +105,11 @@ void ExportCLOptions::PopulateOrExchange(ShuttleGui & S)
    }
    cmd = cmds[0];
 
-   S.StartHorizontalLay(wxEXPAND, 0);
+   S.StartVerticalLay();
    {
-      S.StartStatic(_("Command Line Export Setup"), true);
+      S.StartHorizontalLay(wxEXPAND);
       {
+         S.SetSizerProportion(1);
          S.StartMultiColumn(3, wxEXPAND);
          {
             S.SetStretchyCol(1);
@@ -111,41 +124,37 @@ void ExportCLOptions::PopulateOrExchange(ShuttleGui & S)
                           false);
          }
          S.EndMultiColumn();
-
-         S.AddFixedText(_("Data will be piped to standard in. \"%f\" uses the file name in the export window."));
       }
-      S.EndStatic();
+      S.EndHorizontalLay();
+
+      S.AddTitle(_("Data will be piped to standard in. \"%f\" uses the file name in the export window."));
    }
-   S.EndHorizontalLay();
-
-   S.AddStandardButtons();
-
-   Layout();
-   Fit();
-   SetMinSize(GetSize());
-   Center();
-
-   return;
+   S.EndVerticalLay();
 }
 
 ///
 ///
-void ExportCLOptions::OnOK(wxCommandEvent& WXUNUSED(event))
+bool ExportCLOptions::TransferDataToWindow()
+{
+   return true;
+}
+
+///
+///
+bool ExportCLOptions::TransferDataFromWindow()
 {
    ShuttleGui S(this, eIsSavingToPrefs);
-   wxString cmd = mCmd->GetValue();
-
-   gPrefs->Write(wxT("/FileFormats/ExternalProgramExportCommand"), cmd);
-   gPrefs->Flush();
-
    PopulateOrExchange(S);
+
+   wxString cmd = mCmd->GetValue();
 
    mHistory.AddFileToHistory(cmd, false);
    mHistory.Save(*gPrefs, wxT("/FileFormats/ExternalProgramHistory"));
 
-   EndModal(wxID_OK);
+   gPrefs->Write(wxT("/FileFormats/ExternalProgramExportCommand"), cmd);
+   gPrefs->Flush();
 
-   return;
+   return true;
 }
 
 ///
@@ -197,7 +206,7 @@ static void Drain(wxInputStream *s, wxString *o)
    }
 }
 
-class ExportCLProcess : public wxProcess
+class ExportCLProcess final : public wxProcess
 {
 public:
    ExportCLProcess(wxString *output)
@@ -265,25 +274,24 @@ struct wav_header {
    wxUint32 dataLen;          /* length of all samples in bytes */
 };
 
-class ExportCL : public ExportPlugin
+class ExportCL final : public ExportPlugin
 {
 public:
 
    ExportCL();
-   void Destroy();
 
    // Required
+   wxWindow *OptionsCreate(wxWindow *parent, int format);
 
-   bool DisplayOptions(wxWindow *parent, int format = 0);
    int Export(AudacityProject *project,
                int channels,
-               wxString fName,
+               const wxString &fName,
                bool selectedOnly,
                double t0,
                double t1,
                MixerSpec *mixerSpec = NULL,
-               Tags *metadata = NULL,
-               int subformat = 0);
+               const Tags *metadata = NULL,
+               int subformat = 0) override;
 };
 
 ExportCL::ExportCL()
@@ -297,22 +305,16 @@ ExportCL::ExportCL()
    SetDescription(_("(external program)"),0);
 }
 
-void ExportCL::Destroy()
-{
-   delete this;
-}
-
 int ExportCL::Export(AudacityProject *project,
                       int channels,
-                      wxString fName,
+                      const wxString &fName,
                       bool selectionOnly,
                       double t0,
                       double t1,
                       MixerSpec *mixerSpec,
-                      Tags *WXUNUSED(metadata),
+                      const Tags *WXUNUSED(metadata),
                       int WXUNUSED(subformat))
 {
-   ExportCLProcess *p;
    wxString output;
    wxString cmd;
    bool show;
@@ -350,8 +352,8 @@ int ExportCL::Export(AudacityProject *project,
 #endif
 
    // Kick off the command
-   p = new ExportCLProcess(&output);
-   rc = wxExecute(cmd, wxEXEC_ASYNC, p);
+   ExportCLProcess process(&output);
+   rc = wxExecute(cmd, wxEXEC_ASYNC, &process);
 
 #if defined(__WXMSW__)
    if (!opath.IsEmpty()) {
@@ -362,8 +364,8 @@ int ExportCL::Export(AudacityProject *project,
    if (!rc) {
       wxMessageBox(wxString::Format(_("Cannot export audio to %s"),
                                     fName.c_str()));
-      p->Detach();
-      p->CloseOutput();
+      process.Detach();
+      process.CloseOutput();
 
       return false;
    }
@@ -407,15 +409,14 @@ int ExportCL::Export(AudacityProject *project,
    header.dataLen          = wxUINT32_SWAP_ON_BE(sampleBytes);
 
    // write the header
-   wxOutputStream *os = p->GetOutputStream();
+   wxOutputStream *os = process.GetOutputStream();
    os->Write(&header, sizeof(wav_header));
 
    // Mix 'em up
-   int numWaveTracks;
-   WaveTrack **waveTracks;
-   TrackList *tracks = project->GetTracks();
-   tracks->GetWaveTracks(selectionOnly, &numWaveTracks, &waveTracks);
-   Mixer *mixer = CreateMixer(numWaveTracks,
+   const TrackList *tracks = project->GetTracks();
+   const WaveTrackConstArray waveTracks =
+      tracks->GetWaveTrackConstArray(selectionOnly, false);
+   auto mixer = CreateMixer(
                             waveTracks,
                             tracks->GetTimeTrack(),
                             t0,
@@ -432,77 +433,78 @@ int ExportCL::Export(AudacityProject *project,
    samplePtr mixed = NULL;
    int updateResult = eProgressSuccess;
 
-   // Prepare the progress display
-   ProgressDialog *progress = new ProgressDialog(_("Export"),
-      selectionOnly ?
-      _("Exporting the selected audio using command-line encoder") :
-      _("Exporting the entire project using command-line encoder"));
+   {
+      // Prepare the progress display
+      ProgressDialog progress(_("Export"),
+         selectionOnly ?
+         _("Exporting the selected audio using command-line encoder") :
+         _("Exporting the entire project using command-line encoder"));
 
-   // Start piping the mixed data to the command
-   while (updateResult == eProgressSuccess && p->IsActive() && os->IsOk()) {
-      // Capture any stdout and stderr from the command
-      Drain(p->GetInputStream(), &output);
-      Drain(p->GetErrorStream(), &output);
+      // Start piping the mixed data to the command
+      while (updateResult == eProgressSuccess && process.IsActive() && os->IsOk()) {
+         // Capture any stdout and stderr from the command
+         Drain(process.GetInputStream(), &output);
+         Drain(process.GetErrorStream(), &output);
 
-      // Need to mix another block
-      if (numBytes == 0) {
-         sampleCount numSamples = mixer->Process(maxBlockLen);
-         if (numSamples == 0) {
-            break;
-         }
+         // Need to mix another block
+         if (numBytes == 0) {
+            auto numSamples = mixer->Process(maxBlockLen);
+            if (numSamples == 0) {
+               break;
+            }
 
-         mixed = mixer->GetBuffer();
-         numBytes = numSamples * channels;
+            mixed = mixer->GetBuffer();
+            numBytes = numSamples * channels;
 
-         // Byte-swapping is neccesary on big-endian machines, since
-         // WAV files are little-endian
+            // Byte-swapping is neccesary on big-endian machines, since
+            // WAV files are little-endian
 #if wxBYTE_ORDER == wxBIG_ENDIAN
-         wxUint16 *buffer = (wxUint16 *) mixed;
-         for (int i = 0; i < numBytes; i++) {
-            buffer[i] = wxUINT16_SWAP_ON_BE(buffer[i]);
-         }
+            wxUint16 *buffer = (wxUint16 *) mixed;
+            for (int i = 0; i < numBytes; i++) {
+               buffer[i] = wxUINT16_SWAP_ON_BE(buffer[i]);
+            }
 #endif
-         numBytes *= SAMPLE_SIZE(int16Sample);
-      }
-
-      // Don't write too much at once...pipes may not be able to handle it
-      size_t bytes = wxMin(numBytes, 4096);
-      numBytes -= bytes;
-
-      while (bytes > 0) {
-         os->Write(mixed, bytes);
-         if (!os->IsOk()) {
-            break;
+            numBytes *= SAMPLE_SIZE(int16Sample);
          }
-         bytes -= os->LastWrite();
-         mixed += os->LastWrite();
-      }
 
-      // Update the progress display
-      updateResult = progress->Update(mixer->MixGetCurrentTime()-t0, t1-t0);
+         // Don't write too much at once...pipes may not be able to handle it
+         size_t bytes = wxMin(numBytes, 4096);
+         numBytes -= bytes;
+
+         while (bytes > 0) {
+            os->Write(mixed, bytes);
+            if (!os->IsOk()) {
+               break;
+            }
+            bytes -= os->LastWrite();
+            mixed += os->LastWrite();
+         }
+
+         // Update the progress display
+         updateResult = progress.Update(mixer->MixGetCurrentTime() - t0, t1 - t0);
+      }
+      // Done with the progress display
    }
 
-   // Done with the progress display
-   delete progress;
-
    // Should make the process die
-   p->CloseOutput();
+   process.CloseOutput();
 
    // Wait for process to terminate
-   while (p->IsActive()) {
+   while (process.IsActive()) {
       wxMilliSleep(10);
       wxTheApp->Yield();
    }
 
    // Display output on error or if the user wants to see it
-   if (p->GetStatus() != 0 || show) {
+   if (process.GetStatus() != 0 || show) {
       // TODO use ShowInfoDialog() instead.
-      wxDialog dlg(NULL,
+      wxDialogWrapper dlg(nullptr,
                    wxID_ANY,
                    wxString(_("Command Output")),
                    wxDefaultPosition,
                    wxSize(600, 400),
                    wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
+      dlg.SetName(dlg.GetTitle());
 
       ShuttleGui S(&dlg, eIsCreating);
       S.AddTextWindow(cmd + wxT("\n\n") + output);
@@ -518,25 +520,17 @@ int ExportCL::Export(AudacityProject *project,
       dlg.ShowModal();
    }
 
-   // Clean up
-   delete mixer;
-   delete[] waveTracks;
-   delete p;
-
    return updateResult;
 }
 
-bool ExportCL::DisplayOptions(wxWindow *parent, int WXUNUSED(format))
+wxWindow *ExportCL::OptionsCreate(wxWindow *parent, int format)
 {
-   ExportCLOptions od(parent);
-
-   od.ShowModal();
-
-   return true;
+   wxASSERT(parent); // to justify safenew
+   return safenew ExportCLOptions(parent, format);
 }
 
-ExportPlugin *New_ExportCL()
+movable_ptr<ExportPlugin> New_ExportCL()
 {
-   return new ExportCL();
+   return make_movable<ExportCL>();
 }
 

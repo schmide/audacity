@@ -21,7 +21,7 @@
   Preference field specification:
    /
       Version					- Audacity Version that created these prefs
-      DefaultOpenPath			- Default directory for new file selector
+      DefaultOpenPath			- Default directory for NEW file selector
    /FileFormats
       CopyOrEditUncompressedData - Copy data from uncompressed files or
          [ "copy", "edit"]   - edit in place?
@@ -61,20 +61,13 @@
 #include <wx/filename.h>
 #include <wx/stdpaths.h>
 
+#include "AudacityApp.h"
 #include "FileNames.h"
-
-#include "sndfile.h"
-
-#ifdef __WXMAC__
-#include <CoreServices/CoreServices.h>
-
-/* prototype of MoreFiles fn, included in wxMac already */
-pascal OSErr FSpGetFullPath(const FSSpec * spec,
-                            short *fullPathLength, Handle * fullPath);
-#endif
+#include "Languages.h"
 
 #include "Prefs.h"
 
+std::unique_ptr<wxFileConfig> ugPrefs {};
 wxFileConfig *gPrefs = NULL;
 int gMenusDirty = 0;
 
@@ -142,32 +135,77 @@ void InitPreferences()
 
    wxFileName configFileName(FileNames::DataDir(), wxT("audacity.cfg"));
 
-   gPrefs = new wxFileConfig(appName, wxEmptyString,
-                             configFileName.GetFullPath(),
-                             wxEmptyString, wxCONFIG_USE_LOCAL_FILE);
+   ugPrefs = std::make_unique<wxFileConfig>
+      (appName, wxEmptyString,
+       configFileName.GetFullPath(),
+       wxEmptyString, wxCONFIG_USE_LOCAL_FILE);
+   gPrefs = ugPrefs.get();
 
    wxConfigBase::Set(gPrefs);
 
-   static wxString resourcesDir;
-   resourcesDir = wxStandardPaths::Get().GetResourcesDir();
-   wxFileName fn;
-   fn = wxFileName( resourcesDir, wxT("resetPrefs.txt") );
-   if( fn.FileExists() )   // it will exist if the (win) installer put it there on request
+   bool resetPrefs = false;
+   wxString langCode = gPrefs->Read(wxT("/Locale/Language"), wxEmptyString);
+   bool writeLang = false;
+
+   const wxFileName fn(wxStandardPaths::Get().GetResourcesDir(), wxT("FirstTime.ini"));
+   if (fn.FileExists())   // it will exist if the (win) installer put it there
+   {
+      const wxString fullPath{fn.GetFullPath()};
+
+      wxFileConfig ini(wxEmptyString,
+                       wxEmptyString,
+                       fullPath,
+                       wxEmptyString,
+                       wxCONFIG_USE_LOCAL_FILE);
+
+      wxString lang;
+      if (ini.Read(wxT("/FromInno/Language"), &lang))
+      {
+         // Only change "langCode" if the language was actually specified in the ini file.
+         langCode = lang;
+         writeLang = true;
+
+         // Inno Setup doesn't allow special characters in the Name values, so "0" is used
+         // to represent the "@" character.
+         langCode.Replace(wxT("0"), wxT("@"));
+      }
+
+      ini.Read(wxT("/FromInno/ResetPrefs"), &resetPrefs, false);
+
+      bool gone = wxRemoveFile(fullPath);  // remove FirstTime.ini
+      if (!gone)
+      {
+         wxMessageBox(wxString::Format(_("Failed to remove %s"), fullPath.c_str()), _("Failed!"));
+      }
+   }
+
+   // Use the system default language if one wasn't specified or if the user selected System.
+   if (langCode.IsEmpty())
+   {
+      langCode = GetSystemLanguageCode();
+   }
+
+   // Initialize the language
+   langCode = wxGetApp().InitLang(langCode);
+
+   // User requested that the preferences be completely reset
+   if (resetPrefs)
    {
       // pop up a dialogue
       wxString prompt = _("Reset Preferences?\n\nThis is a one-time question, after an 'install' where you asked to have the Preferences reset.");
       int action = wxMessageBox(prompt, _("Reset Audacity Preferences"),
                                 wxYES_NO, NULL);
-      if(action == wxYES)   // reset
+      if (action == wxYES)   // reset
       {
          gPrefs->DeleteAll();
+         writeLang = true;
       }
-      bool gone = wxRemoveFile(fn.GetFullPath());  // remove resetPrefs.txt
-      if(!gone)
-      {
-         wxString fileName = fn.GetFullPath();
-         wxMessageBox(wxString::Format( _("Failed to remove %s"), fileName.c_str()), _("Failed!"));
-      }
+   }
+
+   // Save the specified language
+   if (writeLang)
+   {
+      gPrefs->Write(wxT("/Locale/Language"), langCode);
    }
 
    // In AUdacity 2.1.0 support for the legacy 1.2.x preferences (depreciated since Audacity
@@ -216,7 +254,7 @@ void InitPreferences()
 
    // In 2.1.0, the Meter toolbar was split and lengthened, but strange arrangements happen
    // if upgrading due to the extra length.  So, if a user is upgrading, use the pre-2.1.0
-   // lengths, but still use the new split versions.
+   // lengths, but still use the NEW split versions.
    if (gPrefs->Exists(wxT("/GUI/ToolBars/Meter")) &&
       !gPrefs->Exists(wxT("/GUI/ToolBars/CombinedMeter"))) {
 
@@ -230,7 +268,7 @@ void InitPreferences()
       gPrefs->Read(wxT("/GUI/ToolBars/Meter/W"), &w, -1);
       gPrefs->Read(wxT("/GUI/ToolBars/Meter/H"), &h, -1);
 
-      // "Order" must be adjusted since we're inserting two new toolbars
+      // "Order" must be adjusted since we're inserting two NEW toolbars
       if (dock > 0) {
          wxString oldPath = gPrefs->GetPath();
          gPrefs->SetPath(wxT("/GUI/ToolBars"));
@@ -283,7 +321,7 @@ void FinishPreferences()
 {
    if (gPrefs) {
       wxConfigBase::Set(NULL);
-      delete gPrefs;
+      ugPrefs.reset();
       gPrefs = NULL;
    }
 }

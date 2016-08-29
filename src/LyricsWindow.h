@@ -19,7 +19,7 @@
 class AudacityProject;
 class Lyrics;
 
-class LyricsWindow : public wxFrame {
+class LyricsWindow final : public wxFrame {
 
  public:
    LyricsWindow(AudacityProject* parent);
@@ -32,6 +32,7 @@ class LyricsWindow : public wxFrame {
 
    void OnStyle_BouncingBall(wxCommandEvent &evt);
    void OnStyle_Highlight(wxCommandEvent &evt);
+   void OnTimer(wxCommandEvent &event);
 
    AudacityProject *mProject;
    Lyrics *mLyricsPanel;

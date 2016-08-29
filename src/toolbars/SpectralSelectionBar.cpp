@@ -29,6 +29,7 @@ with changes in the SpectralSelectionBar.
 #include "../Audacity.h"
 
 #include <algorithm>
+#include "../MemoryX.h"
 
 // For compilers that support precompilation, includes "wx/wx.h".
 #include <wx/wxprec.h>
@@ -54,6 +55,8 @@ with changes in the SpectralSelectionBar.
 #include "../Prefs.h"
 #include "../SelectedRegion.h"
 #include "../widgets/NumericTextCtrl.h"
+
+#include "../Experimental.h"
 
 #ifdef EXPERIMENTAL_SPECTRAL_EDITING
 
@@ -83,7 +86,7 @@ static const wxString preferencePath
 (wxT("/GUI/Toolbars/SpectralSelection/CenterAndWidthChoice"));
 
 SpectralSelectionBar::SpectralSelectionBar()
-: ToolBar(SpectralSelectionBarID, _("SpectralSelection"), wxT("SpectralSelection"))
+: ToolBar(SpectralSelectionBarID, _("Spectral Selection"), wxT("SpectralSelection"))
 , mListener(NULL), mbCenterAndWidth(true)
 , mCenter(0.0), mWidth(0.0), mLow(0.0), mHigh(0.0)
 , mCenterCtrl(NULL), mWidthCtrl(NULL), mLowCtrl(NULL), mHighCtrl(NULL)
@@ -107,7 +110,14 @@ void SpectralSelectionBar::Populate()
    gPrefs->Read(preferencePath, &mbCenterAndWidth, true);
 
    // This will be inherited by all children:
-   SetFont(wxFont(9, wxFONTFAMILY_SWISS, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+   SetFont(wxFont(
+#ifdef __WXMAC__
+                  12
+#else
+                  9
+#endif
+                  ,
+                  wxFONTFAMILY_SWISS, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
 
    /* we don't actually need a control yet, but we want to use its methods
    * to do some look-ups, so we'll have to create one. We can't make the
@@ -121,8 +131,8 @@ void SpectralSelectionBar::Populate()
       ? mListener->SSBL_GetBandwidthSelectionFormatName()
       : wxString(wxEmptyString);
 
-   wxFlexGridSizer *mainSizer = new wxFlexGridSizer(1, 1, 1);
-   Add(mainSizer, 0, wxALIGN_CENTER_VERTICAL);
+   wxFlexGridSizer *mainSizer;
+   Add((mainSizer = safenew wxFlexGridSizer(1, 1, 1)), 0, wxALIGN_CENTER_VERTICAL);
 
    //
    // Top row, choice box
@@ -132,7 +142,7 @@ void SpectralSelectionBar::Populate()
       _("Center frequency and Width"),
       _("Low and High Frequencies"),
    };
-   mChoice = new wxChoice
+   mChoice = safenew wxChoice
       (this, OnChoiceID, wxDefaultPosition, wxDefaultSize, 2, choices,
        0, wxDefaultValidator, _("Spectral Selection"));
    mChoice->SetSelection(mbCenterAndWidth ? 0 : 1);
@@ -142,38 +152,44 @@ void SpectralSelectionBar::Populate()
    // Bottom row, split into two columns, each with one control
    //
 
-   wxBoxSizer *subSizer = new wxBoxSizer(wxHORIZONTAL);
+   {
+      auto subSizer = std::make_unique<wxBoxSizer>(wxHORIZONTAL);
 
-   mCenterCtrl = new NumericTextCtrl(
-      NumericConverter::FREQUENCY, this, OnCenterID, frequencyFormatName, 0.0);
-   mCenterCtrl->SetName(_("Center Frequency:"));
-   mCenterCtrl->EnableMenu();
-   subSizer->Add(mCenterCtrl, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 5);
+      mCenterCtrl = safenew NumericTextCtrl(
+         NumericConverter::FREQUENCY, this, OnCenterID, frequencyFormatName, 0.0);
+      mCenterCtrl->SetInvalidValue(SelectedRegion::UndefinedFrequency);
+      mCenterCtrl->SetName(_("Center Frequency:"));
+      mCenterCtrl->EnableMenu();
+      subSizer->Add(mCenterCtrl, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 5);
 
-   mWidthCtrl = new NumericTextCtrl(
-      NumericConverter::BANDWIDTH, this, OnWidthID, bandwidthFormatName, 0.0);
-   mWidthCtrl->SetName(wxString(_("Bandwidth:")));
-   mWidthCtrl->EnableMenu();
-   subSizer->Add(mWidthCtrl, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 0);
+      mWidthCtrl = safenew NumericTextCtrl(
+         NumericConverter::BANDWIDTH, this, OnWidthID, bandwidthFormatName, 0.0);
+      mWidthCtrl->SetInvalidValue(-1.0);
+      mWidthCtrl->SetName(wxString(_("Bandwidth:")));
+      mWidthCtrl->EnableMenu();
+      subSizer->Add(mWidthCtrl, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 0);
 
-   mLowCtrl = new NumericTextCtrl(
-      NumericConverter::FREQUENCY, this, OnLowID, frequencyFormatName, 0.0);
-   mLowCtrl->SetName(_("Low Frequency:"));
-   mLowCtrl->EnableMenu();
-   subSizer->Add(mLowCtrl, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 5);
+      mLowCtrl = safenew NumericTextCtrl(
+         NumericConverter::FREQUENCY, this, OnLowID, frequencyFormatName, 0.0);
+      mLowCtrl->SetInvalidValue(SelectedRegion::UndefinedFrequency);
+      mLowCtrl->SetName(_("Low Frequency:"));
+      mLowCtrl->EnableMenu();
+      subSizer->Add(mLowCtrl, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 5);
 
-   mHighCtrl = new NumericTextCtrl(
-      NumericConverter::FREQUENCY, this, OnHighID, frequencyFormatName, 0.0);
-   mHighCtrl->SetName(wxString(_("High Frequency:")));
-   mHighCtrl->EnableMenu();
-   subSizer->Add(mHighCtrl, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 0);
+      mHighCtrl = safenew NumericTextCtrl(
+         NumericConverter::FREQUENCY, this, OnHighID, frequencyFormatName, 0.0);
+      mHighCtrl->SetInvalidValue(SelectedRegion::UndefinedFrequency);
+      mHighCtrl->SetName(wxString(_("High Frequency:")));
+      mHighCtrl->EnableMenu();
+      subSizer->Add(mHighCtrl, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 0);
 
-   mCenterCtrl->Show(mbCenterAndWidth);
-   mWidthCtrl->Show(mbCenterAndWidth);
-   mLowCtrl->Show(!mbCenterAndWidth);
-   mHighCtrl->Show(!mbCenterAndWidth);
+      mCenterCtrl->Show(mbCenterAndWidth);
+      mWidthCtrl->Show(mbCenterAndWidth);
+      mLowCtrl->Show(!mbCenterAndWidth);
+      mHighCtrl->Show(!mbCenterAndWidth);
 
-   mainSizer->Add(subSizer, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 0);
+      mainSizer->Add(subSizer.release(), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 0);
+   }
 
    mainSizer->Layout();
 
@@ -198,7 +214,9 @@ void SpectralSelectionBar::UpdatePrefs()
    }
 
    // Set label to pull in language change
-   SetLabel(_("SpectralSelection"));
+   SetLabel(_("Spectral Selection"));
+
+   RegenerateTooltips();
 
    // Give base class a chance
    ToolBar::UpdatePrefs();
@@ -226,7 +244,11 @@ void SpectralSelectionBar::ModifySpectralSelection(bool done)
    if (mbCenterAndWidth) {
       mCenter = mCenterCtrl->GetValue();
       mWidth = mWidthCtrl->GetValue();
-      if (mCenter < 0 && mWidth < 0)
+      if ((mCenter < 0 || mWidth < 0) &&
+          (mLow >= 0 || mHigh >= 0))
+         // Transition from defined spectral selection to undefined
+         bottom = top = SelectedRegion::UndefinedFrequency;
+      else if (mCenter < 0 && mWidth < 0)
          bottom = top = SelectedRegion::UndefinedFrequency;
       else {
          if (mCenter < 0) {
@@ -264,6 +286,10 @@ void SpectralSelectionBar::ModifySpectralSelection(bool done)
       else
          top = SelectedRegion::UndefinedFrequency;
    }
+
+   mLow = bottom;
+   mHigh = top;
+   SetBounds();
 
    // Notify project and track panel, which may change
    // the values again, and call back to us in SetFrequencies()
@@ -349,9 +375,23 @@ void SpectralSelectionBar::ValuesToControls()
       mWidthCtrl->SetValue(mWidth);
    }
    else {
+      SetBounds();
       mLowCtrl->SetValue(mLow);
       mHighCtrl->SetValue(mHigh);
    }
+}
+
+void SpectralSelectionBar::SetBounds()
+{
+   if (mHigh >= 0)
+      mLowCtrl->SetMaxValue(mHigh);
+   else
+      mLowCtrl->ResetMaxValue();
+
+   if (mLow >= 0)
+      mHighCtrl->SetMinValue(mLow);
+   else
+      mHighCtrl->ResetMinValue();
 }
 
 void SpectralSelectionBar::SetFrequencies(double bottom, double top)

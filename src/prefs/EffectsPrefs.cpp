@@ -29,6 +29,8 @@
 
 #include "EffectsPrefs.h"
 
+#include "../Experimental.h"
+
 EffectsPrefs::EffectsPrefs(wxWindow * parent)
 :  PrefsPanel(parent, _("Effects"))
 {
@@ -134,6 +136,7 @@ void EffectsPrefs::PopulateOrExchange(ShuttleGui & S)
    }
    S.EndStatic();
 
+#ifndef EXPERIMENTAL_EFFECT_MANAGEMENT
    S.StartStatic(_("Plugin Options"));
    {
       S.TieCheckBox(_("Check for updated plugins when Audacity starts"),
@@ -144,6 +147,7 @@ void EffectsPrefs::PopulateOrExchange(ShuttleGui & S)
                      false);
    }
    S.EndStatic();
+#endif
 
 #ifdef EXPERIMENTAL_EQ_SSE_THREADED
    S.StartStatic(_("Instruction Set"));
@@ -162,4 +166,10 @@ bool EffectsPrefs::Apply()
    PopulateOrExchange(S);
 
    return true;
+}
+
+PrefsPanel *EffectsPrefsFactory::Create(wxWindow *parent)
+{
+   wxASSERT(parent); // to justify safenew
+   return safenew EffectsPrefs(parent);
 }

@@ -13,17 +13,17 @@
 
 #if defined(USE_LV2)
 
-#if defined(__WXMSW__)
-#include <float.h>
-#define isfinite _finite
-#define isnan _isnan
-#endif
-
 #include <wx/button.h>
 #include <wx/choice.h>
 #include <wx/dcbuffer.h>
 #include <wx/dialog.h>
 #include <wx/dynarray.h>
+
+#ifdef __WXMAC__
+#include <wx/evtloop.h>
+#endif
+
+#include <wx/math.h>
 #include <wx/msgdlg.h>
 #include <wx/sizer.h>
 #include <wx/statbox.h>
@@ -36,6 +36,7 @@
 #include "../../Internat.h"
 #include "../../ShuttleGui.h"
 #include "../../widgets/valnum.h"
+#include "../../widgets/wxPanelWrapper.h"
 
 #include "lilv/lilv.h"
 #include "suil/suil.h"
@@ -46,13 +47,16 @@
 #include "lv2/lv2plug.in/ns/extensions/ui/ui.h"
 
 #if defined(__WXGTK__)
-#include <wx/gtk/win_gtk.h>
-
 #include <gtk/gtk.h>
+#include "win_gtk.h"
 #endif
 
 #if defined(__WXMSW__)
 #include <wx/msw/wrapwin.h>
+#endif
+
+#if defined(__WXMAC__)
+#include <AppKit/AppKit.h>
 #endif
 
 // Define the static URI nodes
@@ -66,7 +70,7 @@ URILIST
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-class LV2EffectMeter : public wxWindow
+class LV2EffectMeter final : public wxWindow
 {
 public:
    LV2EffectMeter(wxWindow *parent, const LV2Port & ctrl);
@@ -97,6 +101,8 @@ LV2EffectMeter::LV2EffectMeter(wxWindow *parent, const LV2Port & ctrl)
    mCtrl(ctrl)
 {
    mLastValue = -mCtrl.mVal;
+
+   SetBackgroundColour(*wxWHITE);
 }
 
 LV2EffectMeter::~LV2EffectMeter()
@@ -107,7 +113,7 @@ void LV2EffectMeter::OnIdle(wxIdleEvent & WXUNUSED(evt))
 {
    if (mLastValue != mCtrl.mVal)
    {
-      Refresh();
+      Refresh(false);
    }
 }
 
@@ -118,7 +124,7 @@ void LV2EffectMeter::OnErase(wxEraseEvent & WXUNUSED(evt))
 
 void LV2EffectMeter::OnPaint(wxPaintEvent & WXUNUSED(evt))
 {
-   wxDC *dc = wxAutoBufferedPaintDCFactory(this);
+   std::unique_ptr<wxDC> dc{ wxAutoBufferedPaintDCFactory(this) };
 
    // Cache some metrics
    wxRect r = GetClientRect();
@@ -137,16 +143,16 @@ void LV2EffectMeter::OnPaint(wxPaintEvent & WXUNUSED(evt))
    {
       val = mCtrl.mMin;
    }
+   val -= mCtrl.mMin;
 
    // Setup for erasing the background
    dc->SetPen(*wxTRANSPARENT_PEN);
    dc->SetBrush(wxColour(100, 100, 220));
 
-   dc->DrawRectangle(x, y, (w * (val / (mCtrl.mMax - mCtrl.mMin))), h);
+   dc->Clear();
+   dc->DrawRectangle(x, y, (w * (val / fabs(mCtrl.mMax - mCtrl.mMin))), h);
 
    mLastValue = mCtrl.mVal;
-
-   delete dc;
 }
 
 void LV2EffectMeter::OnSize(wxSizeEvent & WXUNUSED(evt))
@@ -160,7 +166,7 @@ void LV2EffectMeter::OnSize(wxSizeEvent & WXUNUSED(evt))
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-class LV2EffectSettingsDialog : public wxDialog
+class LV2EffectSettingsDialog final : public wxDialogWrapper
 {
 public:
    LV2EffectSettingsDialog(wxWindow *parent, LV2Effect *effect);
@@ -178,12 +184,12 @@ private:
    DECLARE_EVENT_TABLE();
 };
 
-BEGIN_EVENT_TABLE(LV2EffectSettingsDialog, wxDialog)
+BEGIN_EVENT_TABLE(LV2EffectSettingsDialog, wxDialogWrapper)
    EVT_BUTTON(wxID_OK, LV2EffectSettingsDialog::OnOk)
 END_EVENT_TABLE()
 
 LV2EffectSettingsDialog::LV2EffectSettingsDialog(wxWindow *parent, LV2Effect *effect)
-:  wxDialog(parent, wxID_ANY, wxString(_("LV2 Effect Settings")))
+:  wxDialogWrapper(parent, wxID_ANY, wxString(_("LV2 Effect Settings")))
 {
    mEffect = effect;
 
@@ -375,7 +381,7 @@ wxString LV2Effect::GetVendor()
 
    if (vendor.IsEmpty())
    {
-      vendor = _("N/A");
+      vendor = XO("n/a");
    }
 
    return vendor;
@@ -388,7 +394,7 @@ wxString LV2Effect::GetVersion()
 
 wxString LV2Effect::GetDescription()
 {
-   return _("N/A");
+   return XO("n/a");
 }
 
 // ============================================================================
@@ -453,8 +459,21 @@ bool LV2Effect::SetHost(EffectHostInterface *host)
 {
    mHost = host;
 
-   // Allocate buffers for the port indices and the default control values
    int numPorts = lilv_plugin_get_num_ports(mPlug);
+
+   // Fail if we don't grok the port types
+   for (int i = 0; i < numPorts; i++)
+   {
+      const LilvPort *port = lilv_plugin_get_port_by_index(mPlug, i);
+
+      if (!lilv_port_is_a(mPlug, port, gAudio) &&
+          !lilv_port_is_a(mPlug, port, gControl))
+      {
+         return false;
+      }
+   }
+
+   // Allocate buffers for the port indices and the default control values
    float *minimumVals = new float [numPorts];
    float *maximumVals = new float [numPorts];
    float *defaultValues = new float [numPorts];
@@ -542,13 +561,13 @@ bool LV2Effect::SetHost(EffectHostInterface *host)
       lilv_scale_points_free(points);
 
       // Collect the value and range info
-      ctrl.mHasLo = !isnan(minimumVals[i]);
-      ctrl.mHasHi = !isnan(maximumVals[i]);
+      ctrl.mHasLo = !wxIsNaN(minimumVals[i]);
+      ctrl.mHasHi = !wxIsNaN(maximumVals[i]);
       ctrl.mMin = ctrl.mHasLo ? minimumVals[i] : 0.0;
       ctrl.mMax = ctrl.mHasHi ? maximumVals[i] : 1.0;
       ctrl.mLo = ctrl.mMin;
       ctrl.mHi = ctrl.mMax;
-      ctrl.mDef = !isnan(defaultValues[i]) ?
+      ctrl.mDef = !wxIsNaN(defaultValues[i]) ?
                   defaultValues[i] :
                      ctrl.mHasLo ?
                      ctrl.mLo :
@@ -703,7 +722,7 @@ int LV2Effect::GetMidiOutCount()
    return 0;
 }
 
-void LV2Effect::SetSampleRate(sampleCount rate)
+void LV2Effect::SetSampleRate(double rate)
 {
    mSampleRate = (double) rate;
 
@@ -900,7 +919,7 @@ sampleCount LV2Effect::RealtimeProcess(int group,
 
    for (size_t p = 0, cnt = mAudioInputs.GetCount(); p < cnt; p++)
    {
-      for (sampleCount s = 0; s < numSamples; s++)
+      for (decltype(numSamples) s = 0; s < numSamples; s++)
       {
          mMasterIn[p][s] += inbuf[p][s];
       }
@@ -1070,6 +1089,13 @@ bool LV2Effect::PopulateUI(wxWindow *parent)
                           mUseGUI,
                           true);
 
+   // Until I figure out where to put the "Duration" control in the
+   // graphical editor, force usage of plain editor.
+   if (GetType() == EffectTypeGenerate)
+   {
+      mUseGUI = false;
+   }
+
    if (mUseGUI)
    {
       mUseGUI = BuildFancy();
@@ -1110,6 +1136,12 @@ bool LV2Effect::HideUI()
 
 bool LV2Effect::CloseUI()
 {
+#ifdef __WXMAC__
+#ifdef __WX_EVTLOOP_BUSY_WAITING__
+   wxEventLoop::SetBusyWaiting(false);
+#endif
+#endif
+
    mParent->RemoveEventHandler(this);
 
    if (mSliders)
@@ -1277,34 +1309,36 @@ void LV2Effect::ShowOptions()
 
 bool LV2Effect::LoadParameters(const wxString & group)
 {
-   wxString value;
-
-   if (!mHost->GetPrivateConfig(group, wxT("Value"), value, wxEmptyString))
+   wxString parms;
+   if (!mHost->GetPrivateConfig(group, wxT("Parameters"), parms, wxEmptyString))
    {
       return false;
    }
 
-   wxStringTokenizer st(value, wxT(','));
-   for (size_t p = 0; st.HasMoreTokens(); p++)
+   EffectAutomationParameters eap;
+   if (!eap.SetParameters(parms))
    {
-      double val = 0.0;
-      st.GetNextToken().ToDouble(&val);
-      mControls[p].mVal = (float) val;
+      return false;
    }
 
-   return true;
+   return SetAutomationParameters(eap);
 }
 
 bool LV2Effect::SaveParameters(const wxString & group)
 {
-   wxString parms;
-
-   for (size_t i = 0, cnt = mControls.GetCount(); i < cnt; i++)
+   EffectAutomationParameters eap;
+   if (!GetAutomationParameters(eap))
    {
-      parms += wxString::Format(wxT(",%f"), mControls[i].mVal);
+      return false;
    }
 
-   return mHost->SetPrivateConfig(group, wxT("Value"), parms.Mid(1));
+   wxString parms;
+   if (!eap.GetParameters(parms))
+   {
+      return false;
+   }
+
+   return mHost->SetPrivateConfig(group, wxT("Parameters"), parms);
 }
 
 LV2_Options_Option *LV2Effect::AddOption(const char *key, uint32_t size, const char *type, void *value)
@@ -1425,119 +1459,123 @@ bool LV2Effect::BuildFancy()
    }
 
    // Use a panel to host the plugins GUI
-   mContainer = new wxPanel(mParent, wxID_ANY);
-   if (!mContainer)
+   // container is owned by mParent, but we may destroy it if there are
+   // any errors before completing the build of UI.
+   auto container = std::make_unique<wxPanelWrapper>(mParent, wxID_ANY);
+   if (!container)
    {
       lilv_uis_free(uis);
       return false;
    }
 
-   wxBoxSizer *vs = new wxBoxSizer(wxVERTICAL);
-   wxSizerItem *si = NULL;
-   if (vs)
    {
-      wxBoxSizer *hs = new wxBoxSizer(wxHORIZONTAL);
-      if (hs)
+      auto vs = std::make_unique<wxBoxSizer>(wxVERTICAL);
+      wxSizerItem *si = NULL;
+      if (vs)
       {
-         si = hs->Add(mContainer, 1, wxCENTER | wxEXPAND);
-         vs->Add(hs, 0, wxCENTER);
+         auto hs = std::make_unique<wxBoxSizer>(wxHORIZONTAL);
+         if (hs)
+         {
+            si = hs->Add(container.get(), 1, wxCENTER | wxEXPAND);
+            vs->Add(hs.release(), 0, wxCENTER);
+         }
       }
-   }
-   
-   if (!si)
-   {
-      delete vs;
-      delete mContainer;
-      lilv_uis_free(uis);
-      return false;
-   }
 
-//   wxBoxSizer *hs = new wxBoxSizer(wxVERTICAL);
-//   vs->Add(mContainer, 0, wxALIGN_CENTER);
-//   mParent->SetSizer(vs);
-//wxWindow *mContainer = mParent;
-#if defined(__WXGTK__)
-   // Make sure the parent has a window
-   if (!GTK_WIDGET(mContainer->m_wxwindow)->window)
-   {
-      gtk_widget_realize(GTK_WIDGET(mContainer->m_wxwindow));
-   }
-
-   mParentFeature->data = GTK_WIDGET(mContainer->GetHandle());
-#elif defined(__WXMSW__)
-   mParentFeature->data = mContainer->GetHandle();
-#elif defined(__WXMAC__)
-#endif
-
-   mInstanceAccessFeature->data = lilv_instance_get_handle(mMaster);
-   mExtDataFeature.data_access = lilv_instance_get_descriptor(mMaster)->extension_data;
-
-   // Create the suil host
-   mSuilHost = suil_host_new(LV2Effect::suil_write_func, NULL, NULL, NULL);
-   if (!mSuilHost)
-   {
-      delete vs;
-      delete mContainer;
-      lilv_uis_free(uis);
-      return false;
-   }
-
-   mSuilInstance = suil_instance_new(mSuilHost,
-                                     this,
-                                     nativeType,
-                                     lilv_node_as_uri(lilv_plugin_get_uri(mPlug)),
-                                     lilv_node_as_uri(lilv_ui_get_uri(ui)),
-                                     lilv_node_as_uri(uiType),
-                                     lilv_uri_to_path(lilv_node_as_uri(lilv_ui_get_bundle_uri(ui))),
-                                     lilv_uri_to_path(lilv_node_as_uri(lilv_ui_get_binary_uri(ui))),
-                                     mFeatures);
-
-   lilv_uis_free(uis);
-
-   // Bail if the instance (no compatible UI) couldn't be created
-   if (!mSuilInstance)
-   {
-      suil_host_free(mSuilHost);
-      mSuilHost = NULL;
-
-      delete vs;
-      delete mContainer;
-      return false;
-   }
+      if (!si)
+      {
+         lilv_uis_free(uis);
+         return false;
+      }
 
 #if defined(__WXGTK__)
-   GtkWidget* widget = GTK_WIDGET(suil_instance_get_widget(mSuilInstance));
-   gtk_widget_show_all(widget);
+      // Make sure the parent has a window
+      if (!gtk_widget_get_window(GTK_WIDGET(container->m_wxwindow)))
+      {
+         gtk_widget_realize(GTK_WIDGET(container->m_wxwindow));
+      }
 
-   GtkRequisition sz;
-   gtk_widget_size_request(widget, &sz);
-   gtk_widget_set_size_request(widget, 1, 1);
-   gtk_widget_set_size_request(widget, sz.width, sz.height);
-
-   GtkPizza *pizza = GTK_PIZZA(mContainer->m_wxwindow);
-   gtk_pizza_put(pizza,
-                 widget,
-                 0, //gtk_pizza_get_xoffset(pizza),
-                 0, //gtk_pizza_get_yoffset(pizza),
-                 sz.width,
-                 sz.height);
-   gtk_widget_show_all(GTK_WIDGET(pizza));
-   si->SetMinSize(wxSize(sz.width, sz.height));
+      mParentFeature->data = GTK_WIDGET(container->GetHandle());
 #elif defined(__WXMSW__)
-   HWND widget = (HWND) suil_instance_get_widget(mSuilInstance);
-   RECT rect;
-   GetWindowRect(widget, &rect);
-   si->SetMinSize(wxSize(rect.right - rect.left, rect.bottom - rect.top));
+      mParentFeature->data = container->GetHandle();
 #elif defined(__WXMAC__)
-//   si->SetMinSize(wxSize(sz.width, sz.height));
+      mParentFeature->data = container->GetHandle();
 #endif
 
-   mParent->SetSizerAndFit(vs);
+      mInstanceAccessFeature->data = lilv_instance_get_handle(mMaster);
+      mExtDataFeature.data_access = lilv_instance_get_descriptor(mMaster)->extension_data;
+
+      // Create the suil host
+      mSuilHost = suil_host_new(LV2Effect::suil_write_func, NULL, NULL, NULL);
+      if (!mSuilHost)
+      {
+         lilv_uis_free(uis);
+         return false;
+      }
+
+      mSuilInstance = suil_instance_new(mSuilHost,
+         this,
+         nativeType,
+         lilv_node_as_uri(lilv_plugin_get_uri(mPlug)),
+         lilv_node_as_uri(lilv_ui_get_uri(ui)),
+         lilv_node_as_uri(uiType),
+         lilv_uri_to_path(lilv_node_as_uri(lilv_ui_get_bundle_uri(ui))),
+         lilv_uri_to_path(lilv_node_as_uri(lilv_ui_get_binary_uri(ui))),
+         mFeatures);
+
+      lilv_uis_free(uis);
+
+      // Bail if the instance (no compatible UI) couldn't be created
+      if (!mSuilInstance)
+      {
+         suil_host_free(mSuilHost);
+         mSuilHost = NULL;
+
+         return false;
+      }
+
+#if defined(__WXGTK__)
+      GtkWidget* widget = GTK_WIDGET(suil_instance_get_widget(mSuilInstance));
+      gtk_widget_show_all(widget);
+
+      GtkRequisition sz;
+      gtk_widget_size_request(widget, &sz);
+      gtk_widget_set_size_request(widget, 1, 1);
+      gtk_widget_set_size_request(widget, sz.width, sz.height);
+
+      wxPizza *pizza = WX_PIZZA(container->m_wxwindow);
+      pizza->put(widget,
+         0, //gtk_pizza_get_xoffset(pizza),
+         0, //gtk_pizza_get_yoffset(pizza),
+         sz.width,
+         sz.height);
+      gtk_widget_show_all(GTK_WIDGET(pizza));
+      si->SetMinSize(wxSize(sz.width, sz.height));
+#elif defined(__WXMSW__)
+      HWND widget = (HWND)suil_instance_get_widget(mSuilInstance);
+      RECT rect;
+      GetWindowRect(widget, &rect);
+      si->SetMinSize(wxSize(rect.right - rect.left, rect.bottom - rect.top));
+#elif defined(__WXMAC__)
+      NSView *view = (NSView *) suil_instance_get_widget(mSuilInstance);
+      NSSize sz = [view frame].size;
+      si->SetMinSize(sz.width, sz.height);
+#endif
+
+      mParent->SetSizerAndFit(vs.release());
+      // mParent will guarantee release of the container now.
+      container.release();
+   }
 
    mIdleFeature = (const LV2UI_Idle_Interface *)
       suil_instance_extension_data(mSuilInstance, LV2_UI__idleInterface);
 
    TransferDataToWindow();
+
+#ifdef __WXMAC__
+#ifdef __WX_EVTLOOP_BUSY_WAITING__
+   wxEventLoop::SetBusyWaiting(true);
+#endif
+#endif
 
    return true;
 }
@@ -1551,282 +1589,298 @@ bool LV2Effect::BuildPlain()
    mSliders = new wxSlider *[ctrlcnt];
    mFields = new wxTextCtrl *[ctrlcnt];
 
-   wxSizer *outerSizer = new wxBoxSizer(wxVERTICAL);
-   wxScrolledWindow *w = new wxScrolledWindow(mParent,
-                                              wxID_ANY,
-                                              wxDefaultPosition,
-                                              wxDefaultSize,
-                                              wxVSCROLL | wxTAB_TRAVERSAL);
-   w->SetScrollRate(0, 20);
+   wxSizer *innerSizer;
 
-   // This fools NVDA into not saying "Panel" when the dialog gets focus
-   w->SetName(wxT("\a"));
-   w->SetLabel(wxT("\a"));
+   wxASSERT(mParent); // To justify safenew
+   wxScrolledWindow *const w = safenew wxScrolledWindow(mParent,
+      wxID_ANY,
+      wxDefaultPosition,
+      wxDefaultSize,
+      wxVSCROLL | wxTAB_TRAVERSAL);
 
-   outerSizer->Add(w, 1, wxEXPAND);
-
-   wxSizer *innerSizer = new wxBoxSizer(wxVERTICAL);
-
-   if (GetType() == EffectTypeGenerate)
    {
-      // Add the length control
-      wxSizer *groupSizer = new wxStaticBoxSizer(wxVERTICAL, w, _("Generator"));
+      auto outerSizer = std::make_unique<wxBoxSizer>(wxVERTICAL);
+      w->SetScrollRate(0, 20);
 
-      wxBoxSizer *sizer = new wxBoxSizer(wxHORIZONTAL);
-   
-      bool isSelection;
-      double duration = mHost->GetDuration(&isSelection);
+      // This fools NVDA into not saying "Panel" when the dialog gets focus
+      w->SetName(wxT("\a"));
+      w->SetLabel(wxT("\a"));
 
-      wxWindow *item = new wxStaticText(w, 0, _("&Duration:"));
-      sizer->Add(item, 0, wxALIGN_CENTER | wxALL, 5);
-      mDuration = new
-         NumericTextCtrl(NumericConverter::TIME,
-                         w,
-                         ID_Duration,
-                         isSelection ? _("hh:mm:ss + samples") : _("hh:mm:ss + milliseconds"),
-                         duration,
-                         mSampleRate,
-                         wxDefaultPosition,
-                         wxDefaultSize,
-                         true);
-      mDuration->SetName(_("Duration"));
-      mDuration->EnableMenu();
-      sizer->Add(mDuration, 0, wxALIGN_CENTER | wxALL, 5);
+      outerSizer->Add(w, 1, wxEXPAND);
 
-      groupSizer->Add(sizer, 0, wxALIGN_CENTER | wxALL, 5);
-      innerSizer->Add(groupSizer, 0, wxEXPAND | wxALL, 5);
-   }
-
-   mGroups.Sort();
-
-   for (size_t i = 0, cnt = mGroups.GetCount(); i < cnt; i++)
-   {
-      wxString label = mGroups[i];
-      if (label.IsEmpty())
       {
-         label = _("Effect Settings");
-      }
-      wxSizer *groupSizer = new wxStaticBoxSizer(wxVERTICAL, w, label);
+         auto uInnerSizer = std::make_unique<wxBoxSizer>(wxVERTICAL);
+         innerSizer = uInnerSizer.get();
 
-      wxFlexGridSizer *gridSizer = new wxFlexGridSizer(numCols, 5, 5);
-      gridSizer->AddGrowableCol(3);
-
-      const wxArrayInt & params = mGroupMap[mGroups[i]];
-      for (size_t pi = 0, cnt = params.GetCount(); pi < cnt; pi++)
-      {
-         int p = params[pi];
-         LV2Port & ctrl = mControls[p];
-         wxString labelText = ctrl.mName;
-         if (!ctrl.mUnits.IsEmpty())
+         if (GetType() == EffectTypeGenerate)
          {
-            labelText += wxT(" (") + ctrl.mUnits + wxT(")");
+            // Add the length control
+            auto groupSizer = std::make_unique<wxStaticBoxSizer>(wxVERTICAL, w, _("Generator"));
+
+            auto sizer = std::make_unique<wxBoxSizer>(wxHORIZONTAL);
+
+            wxWindow *item = safenew wxStaticText(w, 0, _("&Duration:"));
+            sizer->Add(item, 0, wxALIGN_CENTER | wxALL, 5);
+            mDuration = safenew
+               NumericTextCtrl(NumericConverter::TIME,
+               w,
+               ID_Duration,
+               mHost->GetDurationFormat(),
+               mHost->GetDuration(),
+               mSampleRate,
+               wxDefaultPosition,
+               wxDefaultSize,
+               true);
+            mDuration->SetName(_("Duration"));
+            mDuration->EnableMenu();
+            sizer->Add(mDuration, 0, wxALIGN_CENTER | wxALL, 5);
+
+            groupSizer->Add(sizer.release(), 0, wxALIGN_CENTER | wxALL, 5);
+            innerSizer->Add(groupSizer.release(), 0, wxEXPAND | wxALL, 5);
          }
 
-         if (ctrl.mTrigger)
+         mGroups.Sort();
+
+         for (size_t i = 0, cnt = mGroups.GetCount(); i < cnt; i++)
          {
-            gridSizer->Add(1, 1, 0);
-
-            wxButton *b = new wxButton(w, ID_Triggers + p, labelText);
-            gridSizer->Add(b, 0, wxALIGN_CENTER_VERTICAL | wxALIGN_LEFT);
-
-            gridSizer->Add(1, 1, 0);
-            gridSizer->Add(1, 1, 0);
-            gridSizer->Add(1, 1, 0);
-            continue;
-         }
-
-         wxWindow *item = new wxStaticText(w, wxID_ANY, labelText + wxT(":"),
-                                           wxDefaultPosition, wxDefaultSize,
-                                           wxALIGN_RIGHT);
-         gridSizer->Add(item, 0, wxALIGN_CENTER_VERTICAL | wxALIGN_RIGHT);
-
-         if (ctrl.mToggle)
-         {
-            wxCheckBox *c = new wxCheckBox(w, ID_Toggles + p, wxT(""));
-            c->SetName(labelText);
-            c->SetValue(ctrl.mVal > 0);
-            gridSizer->Add(c, 0, wxALIGN_CENTER_VERTICAL | wxALIGN_LEFT);
-
-            gridSizer->Add(1, 1, 0);
-            gridSizer->Add(1, 1, 0);
-            gridSizer->Add(1, 1, 0);
-         }
-         else if (ctrl.mEnumeration)      // Check before integer
-         {
-            size_t s;
-            for (s = ctrl.mScaleValues.GetCount() - 1; s >= 0; s--)
+            wxString label = mGroups[i];
+            if (label.IsEmpty())
             {
-               if (ctrl.mVal >= ctrl.mScaleValues[s])
+               label = _("Effect Settings");
+            }
+            auto groupSizer = std::make_unique<wxStaticBoxSizer>(wxVERTICAL, w, label);
+
+            auto gridSizer = std::make_unique<wxFlexGridSizer>(numCols, 5, 5);
+            gridSizer->AddGrowableCol(3);
+
+            const wxArrayInt & params = mGroupMap[mGroups[i]];
+            for (size_t pi = 0, cnt = params.GetCount(); pi < cnt; pi++)
+            {
+               int p = params[pi];
+               LV2Port & ctrl = mControls[p];
+               wxString labelText = ctrl.mName;
+               if (!ctrl.mUnits.IsEmpty())
                {
-                  break;
+                  labelText += wxT(" (") + ctrl.mUnits + wxT(")");
                }
-            }
 
-            if (s < 0)
-            {
-               s = 0;
-            }
-
-            wxChoice *c = new wxChoice(w, ID_Choices + p);
-            c->SetName(labelText);
-            c->Append(ctrl.mScaleLabels);
-            c->SetSelection(s);
-            gridSizer->Add(c, 0, wxALIGN_CENTER_VERTICAL | wxALIGN_LEFT);
-
-            gridSizer->Add(1, 1, 0);
-            gridSizer->Add(1, 1, 0);
-            gridSizer->Add(1, 1, 0);
-         }
-         else if (!ctrl.mInput)
-         {
-            gridSizer->Add(1, 1, 0);
-            gridSizer->Add(1, 1, 0);
-            LV2EffectMeter *m = new LV2EffectMeter(w, ctrl);
-            gridSizer->Add(m, 0, wxALIGN_CENTER_VERTICAL | wxEXPAND);
-            gridSizer->Add(1, 1, 0);
-         }
-         else
-         {
-            mFields[p] = new wxTextCtrl(w, ID_Texts + p, wxT(""));
-            mFields[p]->SetName(labelText);
-            gridSizer->Add(mFields[p], 0, wxALIGN_CENTER_VERTICAL | wxALIGN_LEFT);
-
-            float rate = ctrl.mSampleRate ? mSampleRate : 1.0;
-
-            ctrl.mVal = ctrl.mDef;
-            ctrl.mLo = ctrl.mMin * rate;
-            ctrl.mHi = ctrl.mMax * rate;
-            ctrl.mTmp = ctrl.mDef * rate;
-
-            if (ctrl.mInteger)
-            {
-               IntegerValidator<float> vld(&ctrl.mTmp);
-               vld.SetRange(ctrl.mLo, ctrl.mHi);
-               mFields[p]->SetValidator(vld);
-            }
-            else
-            {
-               FloatingPointValidator<float> vld(6, &ctrl.mTmp);
-               vld.SetRange(ctrl.mLo, ctrl.mHi);
-
-               // Set number of decimal places
-               float range = ctrl.mHi - ctrl.mLo;
-               int style = range < 10 ? NUM_VAL_THREE_TRAILING_ZEROES :
-                           range < 100 ? NUM_VAL_TWO_TRAILING_ZEROES :
-                           NUM_VAL_ONE_TRAILING_ZERO;
-               vld.SetStyle(style);
-
-               mFields[p]->SetValidator(vld);
-            }
-
-            if (ctrl.mHasLo)
-            {
-               wxString str;
-               if (ctrl.mInteger || ctrl.mSampleRate)
+               if (ctrl.mTrigger)
                {
-                  str.Printf(wxT("%d"), lrintf(ctrl.mLo));
+                  gridSizer->Add(1, 1, 0);
+
+                  wxASSERT(w); // To justify safenew
+                  wxButton *b = safenew wxButton(w, ID_Triggers + p, labelText);
+                  gridSizer->Add(b, 0, wxALIGN_CENTER_VERTICAL | wxALIGN_LEFT);
+
+                  gridSizer->Add(1, 1, 0);
+                  gridSizer->Add(1, 1, 0);
+                  gridSizer->Add(1, 1, 0);
+                  continue;
                }
-               else
-               {
-                  str = Internat::ToDisplayString(ctrl.mLo);
-               }
-               item = new wxStaticText(w, wxID_ANY, str);
+
+               wxWindow *item = safenew wxStaticText(w, wxID_ANY, labelText + wxT(":"),
+                  wxDefaultPosition, wxDefaultSize,
+                  wxALIGN_RIGHT);
                gridSizer->Add(item, 0, wxALIGN_CENTER_VERTICAL | wxALIGN_RIGHT);
-            }
-            else
-            {
-               gridSizer->Add(1, 1, 0);
-            }
 
-            mSliders[p] = new wxSlider(w, ID_Sliders + p,
-                                       0, 0, 1000,
-                                       wxDefaultPosition,
-                                       wxSize(150, -1));
-            mSliders[p]->SetName(labelText);
-            gridSizer->Add(mSliders[p], 0, wxALIGN_CENTER_VERTICAL | wxEXPAND);
-
-            if (ctrl.mHasHi)
-            {
-               wxString str;
-               if (ctrl.mInteger || ctrl.mSampleRate)
+               if (ctrl.mToggle)
                {
-                  str.Printf(wxT("%d"), lrintf(ctrl.mHi));
+                  wxCheckBox *c = safenew wxCheckBox(w, ID_Toggles + p, wxT(""));
+                  c->SetName(labelText);
+                  c->SetValue(ctrl.mVal > 0);
+                  gridSizer->Add(c, 0, wxALIGN_CENTER_VERTICAL | wxALIGN_LEFT);
+
+                  gridSizer->Add(1, 1, 0);
+                  gridSizer->Add(1, 1, 0);
+                  gridSizer->Add(1, 1, 0);
+               }
+               else if (ctrl.mEnumeration)      // Check before integer
+               {
+                  int s;
+                  for (s = (int)ctrl.mScaleValues.GetCount() - 1; s >= 0; s--)
+                  {
+                     if (ctrl.mVal >= ctrl.mScaleValues[s])
+                     {
+                        break;
+                     }
+                  }
+
+                  if (s < 0)
+                  {
+                     s = 0;
+                  }
+
+                  wxChoice *c = safenew wxChoice(w, ID_Choices + p);
+                  c->SetName(labelText);
+                  c->Append(ctrl.mScaleLabels);
+                  c->SetSelection(s);
+                  gridSizer->Add(c, 0, wxALIGN_CENTER_VERTICAL | wxALIGN_LEFT);
+
+                  gridSizer->Add(1, 1, 0);
+                  gridSizer->Add(1, 1, 0);
+                  gridSizer->Add(1, 1, 0);
+               }
+               else if (!ctrl.mInput)
+               {
+                  gridSizer->Add(1, 1, 0);
+                  gridSizer->Add(1, 1, 0);
+                  LV2EffectMeter *m = safenew LV2EffectMeter(w, ctrl);
+                  gridSizer->Add(m, 0, wxALIGN_CENTER_VERTICAL | wxEXPAND);
+                  gridSizer->Add(1, 1, 0);
                }
                else
                {
-                  str = Internat::ToDisplayString(ctrl.mHi);
+                  mFields[p] = safenew wxTextCtrl(w, ID_Texts + p, wxT(""));
+                  mFields[p]->SetName(labelText);
+                  gridSizer->Add(mFields[p], 0, wxALIGN_CENTER_VERTICAL | wxALIGN_LEFT);
+
+                  float rate = ctrl.mSampleRate ? mSampleRate : 1.0;
+
+                  ctrl.mVal = ctrl.mDef;
+                  ctrl.mLo = ctrl.mMin * rate;
+                  ctrl.mHi = ctrl.mMax * rate;
+                  ctrl.mTmp = ctrl.mDef * rate;
+
+                  if (ctrl.mInteger)
+                  {
+                     IntegerValidator<float> vld(&ctrl.mTmp);
+                     vld.SetRange(ctrl.mLo, ctrl.mHi);
+                     mFields[p]->SetValidator(vld);
+                  }
+                  else
+                  {
+                     FloatingPointValidator<float> vld(6, &ctrl.mTmp);
+                     vld.SetRange(ctrl.mLo, ctrl.mHi);
+
+                     // Set number of decimal places
+                     float range = ctrl.mHi - ctrl.mLo;
+                     int style = range < 10 ? NUM_VAL_THREE_TRAILING_ZEROES :
+                        range < 100 ? NUM_VAL_TWO_TRAILING_ZEROES :
+                        NUM_VAL_ONE_TRAILING_ZERO;
+                     vld.SetStyle(style);
+
+                     mFields[p]->SetValidator(vld);
+                  }
+
+                  if (ctrl.mHasLo)
+                  {
+                     wxString str;
+                     if (ctrl.mInteger || ctrl.mSampleRate)
+                     {
+                        str.Printf(wxT("%d"), lrintf(ctrl.mLo));
+                     }
+                     else
+                     {
+                        str = Internat::ToDisplayString(ctrl.mLo);
+                     }
+                     item = safenew wxStaticText(w, wxID_ANY, str);
+                     gridSizer->Add(item, 0, wxALIGN_CENTER_VERTICAL | wxALIGN_RIGHT);
+                  }
+                  else
+                  {
+                     gridSizer->Add(1, 1, 0);
+                  }
+
+                  mSliders[p] = safenew wxSlider(w, ID_Sliders + p,
+                     0, 0, 1000,
+                     wxDefaultPosition,
+                     wxSize(150, -1));
+                  mSliders[p]->SetName(labelText);
+                  gridSizer->Add(mSliders[p], 0, wxALIGN_CENTER_VERTICAL | wxEXPAND);
+
+                  if (ctrl.mHasHi)
+                  {
+                     wxString str;
+                     if (ctrl.mInteger || ctrl.mSampleRate)
+                     {
+                        str.Printf(wxT("%d"), lrintf(ctrl.mHi));
+                     }
+                     else
+                     {
+                        str = Internat::ToDisplayString(ctrl.mHi);
+                     }
+                     item = safenew wxStaticText(w, wxID_ANY, str);
+                     gridSizer->Add(item, 0, wxALIGN_CENTER_VERTICAL | wxALIGN_LEFT);
+                  }
+                  else
+                  {
+                     gridSizer->Add(1, 1, 0);
+                  }
                }
-               item = new wxStaticText(w, wxID_ANY, str);
-               gridSizer->Add(item, 0, wxALIGN_CENTER_VERTICAL | wxALIGN_LEFT);
             }
-            else
+
+            groupSizer->Add(gridSizer.release(), 1, wxEXPAND | wxALL, 5);
+            innerSizer->Add(groupSizer.release(), 0, wxEXPAND | wxALL, 5);
+         }
+
+         innerSizer->Layout();
+
+         // Calculate the maximum width of all columns (bypass Generator sizer)
+         wxArrayInt widths;
+         widths.Add(0, numCols);
+
+         size_t cnt = innerSizer->GetChildren().GetCount();
+         for (size_t i = (GetType() == EffectTypeGenerate); i < cnt; i++)
+         {
+            wxSizer *groupSizer = innerSizer->GetItem(i)->GetSizer();
+            wxFlexGridSizer *gridSizer = (wxFlexGridSizer *)groupSizer->GetItem((size_t)0)->GetSizer();
+
+            size_t items = gridSizer->GetChildren().GetCount();
+            int cols = gridSizer->GetCols();
+
+            for (size_t j = 0; j < items; j++)
             {
-               gridSizer->Add(1, 1, 0);
+               wxSizerItem *item = gridSizer->GetItem(j);
+               widths[j % cols] = wxMax(widths[j % cols], item->GetSize().GetWidth());
             }
          }
-      }
 
-      groupSizer->Add(gridSizer, 1, wxEXPAND | wxALL, 5);
-      innerSizer->Add(groupSizer, 0, wxEXPAND | wxALL, 5);
-   }
-
-   innerSizer->Layout();
-
-   // Calculate the maximum width of all columns (bypass Generator sizer)
-   wxArrayInt widths;
-   widths.Add(0, numCols);
-
-   size_t cnt = innerSizer->GetChildren().GetCount();
-   for (size_t i = (GetType() == EffectTypeGenerate); i < cnt; i++)
-   {
-      wxSizer *groupSizer = innerSizer->GetItem(i)->GetSizer();
-      wxFlexGridSizer *gridSizer = (wxFlexGridSizer *)groupSizer->GetItem((size_t) 0)->GetSizer();
-
-      size_t items = gridSizer->GetChildren().GetCount();
-      int cols = gridSizer->GetCols();
-
-      for (size_t j = 0; j < items; j++)
-      {
-         wxSizerItem *item = gridSizer->GetItem(j);
-         widths[j % cols] = wxMax(widths[j % cols], item->GetSize().GetWidth());
-      }
-   }
-
-   // Set each column in all of the groups to the same width.
-   for (size_t i = (GetType() == EffectTypeGenerate); i < cnt; i++)
-   {
-      wxSizer *groupSizer = innerSizer->GetItem(i)->GetSizer();
-      wxFlexGridSizer *gridSizer = (wxFlexGridSizer *)groupSizer->GetItem((size_t) 0)->GetSizer();
-
-      size_t items = gridSizer->GetChildren().GetCount();
-      int cols = gridSizer->GetCols();
-
-      for (size_t j = 0; j < items; j++)
-      {
-         wxSizerItem *item = gridSizer->GetItem(j);
-
-         int flags = item->GetFlag();
-         if (flags & wxEXPAND)
+         // Set each column in all of the groups to the same width.
+         for (size_t i = (GetType() == EffectTypeGenerate); i < cnt; i++)
          {
-            continue;
+            wxSizer *groupSizer = innerSizer->GetItem(i)->GetSizer();
+            wxFlexGridSizer *gridSizer = (wxFlexGridSizer *)groupSizer->GetItem((size_t)0)->GetSizer();
+
+            size_t items = gridSizer->GetChildren().GetCount();
+            int cols = gridSizer->GetCols();
+
+            for (size_t j = 0; j < items; j++)
+            {
+               wxSizerItem *item = gridSizer->GetItem(j);
+
+               int flags = item->GetFlag();
+               if (flags & wxEXPAND)
+               {
+                  continue;
+               }
+
+               if (flags & wxALIGN_RIGHT)
+               {
+                  flags = (flags & ~wxALL) | wxLEFT;
+               }
+               else
+               {
+                  flags = (flags & ~wxALL) | wxRIGHT;
+               }
+               item->SetFlag(flags);
+
+               item->SetBorder(widths[j % cols] - item->GetMinSize().GetWidth());
+            }
          }
 
-         if (flags & wxALIGN_RIGHT)
-         {
-            flags = (flags & ~wxALL) | wxLEFT;
-         }
-         else
-         {
-            flags = (flags & ~wxALL) | wxRIGHT;
-         }
-         item->SetFlag(flags);
-
-         item->SetBorder(widths[j % cols] - item->GetMinSize().GetWidth());
+         w->SetSizer(uInnerSizer.release());
       }
+
+      mParent->SetSizer(outerSizer.release());
    }
-   
-   w->SetSizer(innerSizer);
-   mParent->SetSizer(outerSizer);
+
+   // Try to give the window a sensible default/minimum size
+   wxSize sz1 = innerSizer->GetMinSize();
+   wxSize sz2 = mParent->GetMinSize();
+   w->SetSizeHints(wxSize(-1, wxMin(sz1.y, sz2.y)));
+
+   // And let the parent reduce to the NEW minimum if possible
+   mParent->SetSizeHints(w->GetMinSize());
 
    TransferDataToWindow();
 
@@ -1875,8 +1929,8 @@ bool LV2Effect::TransferDataToWindow()
          }
          else if (ctrl.mEnumeration)      // Check before integer
          {
-            size_t s;
-            for (s = ctrl.mScaleValues.GetCount() - 1; s >= 0; s--)
+            int s;
+            for (s = (int) ctrl.mScaleValues.GetCount() - 1; s >= 0; s--)
             {
                if (ctrl.mVal >= ctrl.mScaleValues[s])
                {

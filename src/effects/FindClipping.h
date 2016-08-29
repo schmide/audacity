@@ -14,16 +14,15 @@
 
 class wxString;
 
-#include <wx/string.h>
+class LabelTrack;
 
-#include "../LabelTrack.h"
-#include "../WaveTrack.h"
+#include <wx/string.h>
 
 #include "Effect.h"
 
 #define FINDCLIPPING_PLUGIN_SYMBOL XO("Find Clipping")
 
-class EffectFindClipping : public Effect
+class EffectFindClipping final : public Effect
 {
 public:
    EffectFindClipping();
@@ -31,29 +30,29 @@ public:
 
    // IdentInterface implementation
 
-   virtual wxString GetSymbol();
-   virtual wxString GetDescription();
+   wxString GetSymbol() override;
+   wxString GetDescription() override;
 
    // EffectIdentInterface implementation
 
-   virtual EffectType GetType();
+   EffectType GetType() override;
 
    // EffectClientInterface implementation
 
-   virtual bool GetAutomationParameters(EffectAutomationParameters & parms);
-   virtual bool SetAutomationParameters(EffectAutomationParameters & parms);
+   bool GetAutomationParameters(EffectAutomationParameters & parms) override;
+   bool SetAutomationParameters(EffectAutomationParameters & parms) override;
 
    // Effect implementation
 
-   virtual bool Process();
-   virtual void PopulateOrExchange(ShuttleGui & S);
-   virtual bool TransferDataToWindow();
-   virtual bool TransferDataFromWindow();
+   bool Process() override;
+   void PopulateOrExchange(ShuttleGui & S) override;
+   bool TransferDataToWindow() override;
+   bool TransferDataFromWindow() override;
 
 private:
    // EffectFindCliping implementation
 
-   bool ProcessOne(LabelTrack *l, int count, WaveTrack * t,
+   bool ProcessOne(LabelTrack *lt, int count, const WaveTrack * wt,
                    sampleCount start, sampleCount len);
 
 private:

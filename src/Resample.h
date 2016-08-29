@@ -17,10 +17,9 @@
 #include <wx/intl.h>
 #include <wx/string.h>
 
-#include "Prefs.h"
 #include "SampleFormat.h"
 
-class Resample
+class Resample final
 {
  public:
    /// Resamplers may have more than one method, offering a
@@ -34,7 +33,7 @@ class Resample
    // dMinFactor and dMaxFactor specify the range of factors for variable-rate resampling.
    // For constant-rate, pass the same value for both.
    Resample(const bool useBestMethod, const double dMinFactor, const double dMaxFactor);
-   virtual ~Resample();
+   ~Resample();
 
    static int GetNumMethods();
    static wxString GetMethodName(int index);
@@ -66,7 +65,7 @@ class Resample
     @param outBufferLen How big outBuffer is.
     @return Number of output samples created by this call
    */
-   virtual int Process(double   factor,
+   int Process(double   factor,
                         float  *inBuffer,
                         int     inBufferLen,
                         bool    lastFlag,
@@ -75,13 +74,7 @@ class Resample
                         int     outBufferLen);
 
  protected:
-   void SetMethod(const bool useBestMethod)
-   {
-      if (useBestMethod)
-         mMethod = gPrefs->Read(GetBestMethodKey(), GetBestMethodDefault());
-      else
-         mMethod = gPrefs->Read(GetFastMethodKey(), GetFastMethodDefault());
-   };
+   void SetMethod(const bool useBestMethod);
 
  protected:
    int   mMethod; // resampler-specific enum for resampling method

@@ -11,6 +11,8 @@
 #ifndef __AUDACITY_SEQUENCE__
 #define __AUDACITY_SEQUENCE__
 
+#include "MemoryX.h"
+#include <vector>
 #include <wx/string.h>
 #include <wx/dynarray.h>
 
@@ -28,22 +30,36 @@ typedef wxLongLong_t sampleCount; /** < A native 64-bit integer type, because
 #endif
 
 class BlockFile;
+using BlockFilePtr = std::shared_ptr<BlockFile>;
+
 class DirManager;
 
 // This is an internal data structure!  For advanced use only.
 class SeqBlock {
  public:
-   BlockFile * f;
+   BlockFilePtr f;
    ///the sample in the global wavetrack that this block starts at.
    sampleCount start;
+
+   SeqBlock()
+      : f{}, start(0)
+   {}
+
+   SeqBlock(const BlockFilePtr &f_, sampleCount start_)
+      : f(f_), start(start_)
+   {}
+
+   // Construct a SeqBlock with changed start, same file
+   SeqBlock Plus(sampleCount delta) const
+   {
+      return SeqBlock(f, start + delta);
+   }
 };
-WX_DEFINE_ARRAY(SeqBlock *, BlockArray);
+class BlockArray : public std::vector<SeqBlock> {};
+using BlockPtrArray = std::vector<SeqBlock*>; // non-owning pointers
 
-class Sequence: public XMLTagHandler {
+class PROFILE_DLL_API Sequence final : public XMLTagHandler{
  public:
-
-   // Temporary: only until we delete TrackArtist once and for all
-   friend class TrackArtist;
 
    //
    // Static methods
@@ -56,17 +72,14 @@ class Sequence: public XMLTagHandler {
    // Constructor / Destructor / Duplicator
    //
 
-   Sequence(DirManager * projDirManager, sampleFormat format);
+   Sequence(const std::shared_ptr<DirManager> &projDirManager, sampleFormat format);
 
    // The copy constructor and duplicate operators take a
    // DirManager as a parameter, because you might be copying
    // from one project to another...
-   Sequence(const Sequence &orig, DirManager *projDirManager);
-   Sequence *Duplicate(DirManager *projDirManager) const {
-      return new Sequence(*this, projDirManager);
-   }
+   Sequence(const Sequence &orig, const std::shared_ptr<DirManager> &projDirManager);
 
-   virtual ~Sequence();
+   ~Sequence();
 
    //
    // Editing
@@ -86,21 +99,21 @@ class Sequence: public XMLTagHandler {
    // where[p] up to (but excluding) where[p + 1].
    // bl is negative wherever data are not yet available.
    // Return true if successful.
-   bool GetWaveDisplay(float *min, float *max, float *rms,int* bl,
+   bool GetWaveDisplay(float *min, float *max, float *rms, int* bl,
                        int len, const sampleCount *where);
 
-   bool Copy(sampleCount s0, sampleCount s1, Sequence **dest);
+   bool Copy(sampleCount s0, sampleCount s1, std::unique_ptr<Sequence> &dest) const;
    bool Paste(sampleCount s0, const Sequence *src);
 
    sampleCount GetIdealAppendLen();
    bool Append(samplePtr buffer, sampleFormat format, sampleCount len,
                XMLWriter* blockFileLog=NULL);
    bool Delete(sampleCount start, sampleCount len);
-   bool AppendAlias(wxString fullPath,
+   bool AppendAlias(const wxString &fullPath,
                     sampleCount start,
-                    sampleCount len, int channel,bool useOD);
+                    sampleCount len, int channel, bool useOD);
 
-   bool AppendCoded(wxString fName, sampleCount start,
+   bool AppendCoded(const wxString &fName, sampleCount start,
                             sampleCount len, int channel, int decodeType);
 
    ///gets an int with OD flags so that we can determine which ODTasks should be run on this track after save/open, etc.
@@ -112,21 +125,21 @@ class Sequence: public XMLTagHandler {
    // be registered within the dir manager hash. This is the case
    // when the blockfile is created using DirManager::NewSimpleBlockFile or
    // loaded from an XML file via DirManager::HandleXMLTag
-   void AppendBlockFile(BlockFile* blockFile);
+   void AppendBlockFile(const BlockFilePtr &blockFile);
 
    bool SetSilence(sampleCount s0, sampleCount len);
    bool InsertSilence(sampleCount s0, sampleCount len);
 
-   DirManager* GetDirManager() { return mDirManager; }
+   const std::shared_ptr<DirManager> &GetDirManager() { return mDirManager; }
 
    //
    // XMLTagHandler callback methods for loading and saving
    //
 
-   virtual bool HandleXMLTag(const wxChar *tag, const wxChar **attrs);
-   virtual void HandleXMLEndTag(const wxChar *tag);
-   virtual XMLTagHandler *HandleXMLChild(const wxChar *tag);
-   virtual void WriteXML(XMLWriter &xmlFile);
+   bool HandleXMLTag(const wxChar *tag, const wxChar **attrs) override;
+   void HandleXMLEndTag(const wxChar *tag) override;
+   XMLTagHandler *HandleXMLChild(const wxChar *tag) override;
+   void WriteXML(XMLWriter &xmlFile) /* not override */;
 
    bool GetErrorOpening() { return mErrorOpening; }
 
@@ -138,15 +151,17 @@ class Sequence: public XMLTagHandler {
    //
 
    bool Lock();
-   bool CloseLock();//similar to Lock but should be called upon project close.
    bool Unlock();
+
+   bool CloseLock();//similar to Lock but should be called upon project close.
+   // not balanced by unlocking calls.
 
    //
    // Manipulating Sample Format
    //
 
    sampleFormat GetSampleFormat() const;
-   bool SetSampleFormat(sampleFormat format);
+   // bool SetSampleFormat(sampleFormat format);
    bool ConvertToSampleFormat(sampleFormat format, bool* pbChanged);
 
    //
@@ -159,9 +174,10 @@ class Sequence: public XMLTagHandler {
                   float * outRMS) const;
 
    //
-   // Getting block size information
+   // Getting block size and alignment information
    //
 
+   sampleCount GetBlockStart(sampleCount position) const;
    sampleCount GetBestBlockSize(sampleCount start) const;
    sampleCount GetMaxBlockSize() const;
    sampleCount GetIdealBlockSize() const;
@@ -171,11 +187,26 @@ class Sequence: public XMLTagHandler {
    // you're doing!
    //
 
-   BlockArray *GetBlockArray() {return mBlock;}
+   BlockArray &GetBlockArray() {return mBlock;}
 
    ///
    void LockDeleteUpdateMutex(){mDeleteUpdateMutex.Lock();}
    void UnlockDeleteUpdateMutex(){mDeleteUpdateMutex.Unlock();}
+
+   // RAII idiom wrapping the functions above
+   struct DeleteUpdateMutexLocker {
+      DeleteUpdateMutexLocker(Sequence &sequence)
+         : mSequence(sequence)
+      {
+         mSequence.LockDeleteUpdateMutex();
+      }
+      ~DeleteUpdateMutexLocker()
+      {
+         mSequence.UnlockDeleteUpdateMutex();
+      }
+   private:
+      Sequence &mSequence;
+   };
 
  private:
 
@@ -189,16 +220,16 @@ class Sequence: public XMLTagHandler {
    // Private variables
    //
 
-   DirManager   *mDirManager;
+   std::shared_ptr<DirManager> mDirManager;
 
-   BlockArray   *mBlock;
+   BlockArray    mBlock;
    sampleFormat  mSampleFormat;
-   sampleCount   mNumSamples;
+   sampleCount   mNumSamples{ 0 };
 
    sampleCount   mMinSamples; // min samples per block
    sampleCount   mMaxSamples; // max samples per block
 
-   bool          mErrorOpening;
+   bool          mErrorOpening{ false };
 
    ///To block the Delete() method against the ODCalcSummaryTask::Update() method
    ODLock   mDeleteUpdateMutex;
@@ -207,29 +238,22 @@ class Sequence: public XMLTagHandler {
    // Private methods
    //
 
-   void CalcSummaryInfo();
-
    int FindBlock(sampleCount pos) const;
-   int FindBlock(sampleCount pos, sampleCount lo,
-                 sampleCount guess, sampleCount hi) const;
 
-   bool AppendBlock(SeqBlock *b);
+   bool AppendBlock(const SeqBlock &b);
 
    bool Read(samplePtr buffer, sampleFormat format,
-             SeqBlock * b,
+             const SeqBlock &b,
              sampleCount start, sampleCount len) const;
 
-   // These are the two ways to write data to a block
-   bool FirstWrite(samplePtr buffer, SeqBlock * b, sampleCount len);
-   bool CopyWrite(samplePtr buffer, SeqBlock * b,
+   bool CopyWrite(SampleBuffer &scratch,
+                  samplePtr buffer,    SeqBlock &b,
                   sampleCount start, sampleCount len);
 
-   // Both block-writing methods and AppendAlias call this
-   // method to write the summary data
-   void *GetSummary(samplePtr buffer, sampleCount len,
-                    float *min, float *max, float *rms);
+   void Blockify(BlockArray &list, sampleCount start, samplePtr buffer, sampleCount len);
 
-   BlockArray *Blockify(samplePtr buffer, sampleCount len);
+   bool Get(int b, samplePtr buffer, sampleFormat format,
+      sampleCount start, sampleCount len) const;
 
  public:
 
@@ -239,11 +263,11 @@ class Sequence: public XMLTagHandler {
 
    // This function makes sure that the track isn't messed up
    // because of inconsistent block starts & lengths
-   bool ConsistencyCheck(const wxChar *whereStr);
+   bool ConsistencyCheck(const wxChar *whereStr) const;
 
    // This function prints information to stdout about the blocks in the
    // tracks and indicates if there are inconsistencies.
-   void DebugPrintf(wxString *dest);
+   void DebugPrintf(wxString *dest) const;
 };
 
 #endif // __AUDACITY_SEQUENCE__

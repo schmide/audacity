@@ -16,38 +16,39 @@
 #include <wx/window.h>
 #include "../widgets/Grid.h"
 
-#include "../ShuttleGui.h"
-
 #include "PrefsPanel.h"
 
 #include "../import/Import.h"
 #include "../import/ImportPlugin.h"
 
+class wxButton;
+class wxListCtrl;
 class wxListEvent;
 class ExtImportPrefs;
+class ShuttleGui;
 
-class ExtImportPrefsDropTarget: public wxDropTarget
+class ExtImportPrefsDropTarget final : public wxDropTarget
 {
 public:
-   ExtImportPrefsDropTarget (wxDataObject *dataObject = 0);
+   // Takes ownership of the argument
+   ExtImportPrefsDropTarget(wxDataObject* dataObject = nullptr);
    ~ExtImportPrefsDropTarget ();
    wxDragResult OnData(wxCoord x, wxCoord y, wxDragResult def);
    bool OnDrop(wxCoord x, wxCoord y);
    wxDragResult OnEnter(wxCoord x, wxCoord y, wxDragResult def);
    wxDragResult OnDragOver(wxCoord x, wxCoord y, wxDragResult def);
    void OnLeave();
-   void SetDataObject(wxDataObject* data);
    void SetPrefs (ExtImportPrefs *prefs);
 private:
    ExtImportPrefs *mPrefs;
 };
 
-class ExtImportPrefs:public PrefsPanel
+class ExtImportPrefs final : public PrefsPanel
 {
  public:
    ExtImportPrefs(wxWindow * parent);
    ~ExtImportPrefs();
-   virtual bool Apply();
+   bool Apply() override;
 
    void OnPluginKeyDown(wxListEvent& event);
    void OnPluginBeginDrag(wxListEvent& event);
@@ -85,10 +86,8 @@ class ExtImportPrefs:public PrefsPanel
    wxButton *MoveFilterUp;
    wxButton *MoveFilterDown;
 
-   wxTextDataObject *dragtext1;
-   wxTextDataObject *dragtext2;
-   ExtImportPrefsDropTarget *dragtarget1;
-   ExtImportPrefsDropTarget *dragtarget2;
+   wxTextDataObject *dragtext1 {};
+   wxTextDataObject *dragtext2 {};
 
    bool mCreateTable;
    wxWindow *mDragFocus;
@@ -101,10 +100,16 @@ class ExtImportPrefs:public PrefsPanel
    void DoOnRuleTableKeyDown (int keycode);
    bool DoOnPluginKeyDown (int code);
    void DoOnRuleTableSelect (int toprow);
-   void AddItemToTable (int index, ExtImportItem *item);
+   void AddItemToTable (int index, const ExtImportItem *item);
    void Populate();
    void PopulateOrExchange(ShuttleGui & S);
    DECLARE_EVENT_TABLE()
 };
 
+
+class ExtImportPrefsFactory final : public PrefsPanelFactory
+{
+public:
+   PrefsPanel *Create(wxWindow *parent) override;
+};
 #endif

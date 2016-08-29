@@ -50,19 +50,21 @@ class wxRect;
 class DirManager;
 class Alg_seq;   // from "allegro.h"
 
-class AUDACITY_DLL_API NoteTrack:public Track {
+class AUDACITY_DLL_API NoteTrack final : public Track {
  public:
    friend class TrackArtist;
 
-   NoteTrack(DirManager * projDirManager);
+   NoteTrack(const std::shared_ptr<DirManager> &projDirManager);
    virtual ~NoteTrack();
 
-   virtual Track *Duplicate();
+   using Holder = std::unique_ptr<NoteTrack>;
+   Track::Holder Duplicate() const override;
 
-   virtual int GetKind() const { return Note; }
+   int GetKind() const override { return Note; }
 
-   virtual double GetStartTime();
-   virtual double GetEndTime();
+   double GetOffset() const override;
+   double GetStartTime() const override;
+   double GetEndTime() const override;
 
    void WarpAndTransposeNotes(double t0, double t1,
                               const TimeWarper &warper, double semitones);
@@ -70,15 +72,15 @@ class AUDACITY_DLL_API NoteTrack:public Track {
    int DrawLabelControls(wxDC & dc, wxRect & r);
    bool LabelClick(wxRect & r, int x, int y, bool right);
 
-   void SetSequence(Alg_seq *seq);
+   void SetSequence(std::unique_ptr<Alg_seq> &&seq);
    Alg_seq* GetSequence();
    void PrintSequence();
 
    int GetVisibleChannels();
 
-   Alg_seq_ptr MakeExportableSeq();
-   bool ExportMIDI(wxString f);
-   bool ExportAllegro(wxString f);
+   Alg_seq *MakeExportableSeq(std::unique_ptr<Alg_seq> &cleanup);
+   bool ExportMIDI(const wxString &f);
+   bool ExportAllegro(const wxString &f);
 
 /* REQUIRES PORTMIDI */
 //   int GetLastMidiPosition() const { return mLastMidiPosition; }
@@ -88,12 +90,12 @@ class AUDACITY_DLL_API NoteTrack:public Track {
 //   }
 
    // High-level editing
-   virtual bool Cut  (double t0, double t1, Track **dest);
-   virtual bool Copy (double t0, double t1, Track **dest);
-   virtual bool Trim (double t0, double t1);
-   virtual bool Clear(double t0, double t1);
-   virtual bool Paste(double t, Track *src);
-   virtual bool Shift(double t);
+   Track::Holder Cut  (double t0, double t1) override;
+   Track::Holder Copy (double t0, double t1) const override;
+   bool Trim (double t0, double t1) /* not override */;
+   bool Clear(double t0, double t1) override;
+   bool Paste(double t, const Track *src) override;
+   bool Shift(double t) /* not override */;
 
 #ifdef EXPERIMENTAL_MIDI_OUT
    float GetGain() const { return mGain; }
@@ -115,7 +117,7 @@ class AUDACITY_DLL_API NoteTrack:public Track {
    // call this once before a series of calls to IPitchToY(). It
    // sets mBottom to offset of octave 0 so that mBottomNote
    // is located at r.y + r.height - (GetNoteMargin() + 1 + mPitchHeight)
-   void PrepareIPitchToY(const wxRect &r) {
+   void PrepareIPitchToY(const wxRect &r) const {
        mBottom = r.y + r.height - GetNoteMargin() - 1 - mPitchHeight +
           (mBottomNote / 12) * GetOctaveHeight() +
           GetNotePos(mBottomNote % 12);
@@ -168,9 +170,9 @@ class AUDACITY_DLL_API NoteTrack:public Track {
    void SetGainPlacementRect(const wxRect &r) { mGainPlacementRect = r; }
 #endif
 
-   virtual bool HandleXMLTag(const wxChar *tag, const wxChar **attrs);
-   virtual XMLTagHandler *HandleXMLChild(const wxChar *tag);
-   virtual void WriteXML(XMLWriter &xmlFile);
+   bool HandleXMLTag(const wxChar *tag, const wxChar **attrs) override;
+   XMLTagHandler *HandleXMLChild(const wxChar *tag) override;
+   void WriteXML(XMLWriter &xmlFile) override;
 
    // channels are numbered as integers 0-15, visible channels
    // (mVisibleChannels) is a bit set. Channels are displayed as
@@ -184,7 +186,7 @@ class AUDACITY_DLL_API NoteTrack:public Track {
    void ClearVisibleChan(int c) { mVisibleChannels &= ~CHANNEL_BIT(c); }
    void ToggleVisibleChan(int c) { mVisibleChannels ^= CHANNEL_BIT(c); }
  private:
-   Alg_seq *mSeq; // NULL means no sequence
+   std::unique_ptr<Alg_seq> mSeq; // NULL means no sequence
    // when Duplicate() is called, assume that it is to put a copy
    // of the track into the undo stack or to redo/copy from the
    // stack to the project object. We want copies to the stack
@@ -196,17 +198,15 @@ class AUDACITY_DLL_API NoteTrack:public Track {
    // mSeq variable. (TrackArtist should check to make sure this
    // flip-flop from mSeq to mSerializationBuffer happened an
    // even number of times, otherwise mSeq will be NULL).
-   char *mSerializationBuffer; // NULL means no buffer
+   mutable char *mSerializationBuffer; // NULL means no buffer
    long mSerializationLength;
-
-   DirManager *mDirManager;
 
 #ifdef EXPERIMENTAL_MIDI_OUT
    float mGain; // velocity offset
 #endif
 
    // mBottom is the Y offset of pitch 0 (normally off screen)
-   int mBottom;
+   mutable int mBottom;
    int mBottomNote;
    int mStartBottomNote;
    int mPitchHeight;

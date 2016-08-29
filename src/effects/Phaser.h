@@ -21,15 +21,32 @@
 #include <wx/string.h>
 #include <wx/textctrl.h>
 
-#include "../ShuttleGui.h"
-
 #include "Effect.h"
+
+class ShuttleGui;
 
 #define NUM_STAGES 24
 
 #define PHASER_PLUGIN_SYMBOL XO("Phaser")
 
-class EffectPhaser : public Effect
+class EffectPhaserState
+{
+public:
+   // state variables
+   float samplerate;
+   sampleCount skipcount;
+   double old[NUM_STAGES]; // must be as large as MAX_STAGES
+   double gain;
+   double fbout;
+   double outgain;
+   double lfoskip;
+   double phase;
+   int laststages;
+};
+
+WX_DECLARE_OBJARRAY(EffectPhaserState, EffectPhaserStateArray);
+
+class EffectPhaser final : public Effect
 {
 public:
    EffectPhaser();
@@ -37,21 +54,29 @@ public:
 
    // IdentInterface implementation
 
-   virtual wxString GetSymbol();
-   virtual wxString GetDescription();
+   wxString GetSymbol() override;
+   wxString GetDescription() override;
 
    // EffectIdentInterface implementation
 
-   virtual EffectType GetType();
+   EffectType GetType() override;
+   bool SupportsRealtime() override;
 
    // EffectClientInterface implementation
 
-   virtual int GetAudioInCount();
-   virtual int GetAudioOutCount();
-   virtual bool ProcessInitialize(sampleCount totalLen, ChannelNames chanMap = NULL);
-   virtual sampleCount ProcessBlock(float **inBlock, float **outBlock, sampleCount blockLen);
-   virtual bool GetAutomationParameters(EffectAutomationParameters & parms);
-   virtual bool SetAutomationParameters(EffectAutomationParameters & parms);
+   int GetAudioInCount() override;
+   int GetAudioOutCount() override;
+   bool ProcessInitialize(sampleCount totalLen, ChannelNames chanMap = NULL) override;
+   sampleCount ProcessBlock(float **inBlock, float **outBlock, sampleCount blockLen) override;
+   bool RealtimeInitialize() override;
+   bool RealtimeAddProcessor(int numChannels, float sampleRate) override;
+   bool RealtimeFinalize() override;
+   sampleCount RealtimeProcess(int group,
+                                       float **inbuf,
+                                       float **outbuf,
+                                       sampleCount numSamples) override;
+   bool GetAutomationParameters(EffectAutomationParameters & parms) override;
+   bool SetAutomationParameters(EffectAutomationParameters & parms) override;
 
    // Effect implementation
 
@@ -59,8 +84,11 @@ public:
    bool TransferDataToWindow();
    bool TransferDataFromWindow();
 
-protected:
+private:
    // EffectPhaser implementation
+
+   void InstanceInit(EffectPhaserState & data, float sampleRate);
+   sampleCount InstanceProcess(EffectPhaserState & data, float **inBlock, float **outBlock, sampleCount blockLen);
 
    void OnStagesSlider(wxCommandEvent & evt);
    void OnDryWetSlider(wxCommandEvent & evt);
@@ -68,12 +96,15 @@ protected:
    void OnDepthSlider(wxCommandEvent & evt);
    void OnPhaseSlider(wxCommandEvent & evt);
    void OnFreqSlider(wxCommandEvent & evt);
+   void OnGainSlider(wxCommandEvent & evt);
+
    void OnStagesText(wxCommandEvent & evt);
    void OnDryWetText(wxCommandEvent & evt);
    void OnFeedbackText(wxCommandEvent & evt);
    void OnDepthText(wxCommandEvent & evt);
    void OnPhaseText(wxCommandEvent & evt);
    void OnFreqText(wxCommandEvent & evt);
+   void OnGainText(wxCommandEvent & evt);
 /*
     Phaser Parameters
 
@@ -87,13 +118,8 @@ protected:
 */
 
 private:
-   // state variables
-   sampleCount skipcount;
-   double old[NUM_STAGES]; // must be as large as MAX_STAGES
-   double gain;
-   double fbout;
-   double lfoskip;
-   double phase;
+   EffectPhaserState mMaster;
+   EffectPhaserStateArray mSlaves;
 
    // parameters
    int mStages;
@@ -102,6 +128,7 @@ private:
    double mPhase;
    int mDepth;
    int mFeedback;
+   double mOutGain;
 
    wxTextCtrl *mStagesT;
    wxTextCtrl *mDryWetT;
@@ -109,6 +136,7 @@ private:
    wxTextCtrl *mPhaseT;
    wxTextCtrl *mDepthT;
    wxTextCtrl *mFeedbackT;
+   wxTextCtrl *mOutGainT;
 
    wxSlider *mStagesS;
    wxSlider *mDryWetS;
@@ -116,6 +144,7 @@ private:
    wxSlider *mPhaseS;
    wxSlider *mDepthS;
    wxSlider *mFeedbackS;
+   wxSlider *mOutGainS;
 
    DECLARE_EVENT_TABLE();
 };

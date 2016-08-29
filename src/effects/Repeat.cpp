@@ -38,7 +38,7 @@
 // Define keys, defaults, minimums, and maximums for the effect parameters
 //
 //     Name    Type  Key             Def  Min   Max      Scale
-Param( Count,  int,  XO("Count"),    10,  2,    INT_MAX, 1  );
+Param( Count,  int,  XO("Count"),    1,  1,    INT_MAX, 1  );
 
 BEGIN_EVENT_TABLE(EffectRepeat, wxEvtHandler)
    EVT_TEXT(wxID_ANY, EffectRepeat::OnRepeatTextChange)
@@ -46,7 +46,9 @@ END_EVENT_TABLE()
 
 EffectRepeat::EffectRepeat()
 {
-   repeatCount = 10;
+   repeatCount = DEF_Count;
+
+   SetLinearEffectFlag(true);
 }
 
 EffectRepeat::~EffectRepeat()
@@ -102,7 +104,7 @@ bool EffectRepeat::Process()
    bool bGoodResult = true;
    double maxDestLen = 0.0; // used to change selection to generated bit
 
-   TrackListIterator iter(mOutputTracks);
+   TrackListIterator iter(mOutputTracks.get());
 
    for (Track *t = iter.First(); t && bGoodResult; t = iter.Next())
    {
@@ -123,9 +125,9 @@ bool EffectRepeat::Process()
       {
          WaveTrack* track = (WaveTrack*)t;
 
-         sampleCount start = track->TimeToLongSamples(mT0);
-         sampleCount end = track->TimeToLongSamples(mT1);
-         sampleCount len = (sampleCount)(end - start);
+         auto start = track->TimeToLongSamples(mT0);
+         auto end = track->TimeToLongSamples(mT1);
+         auto len = end - start;
          double tLen = track->LongSamplesToTime(len);
          double tc = mT0 + tLen;
 
@@ -134,11 +136,10 @@ bool EffectRepeat::Process()
             continue;
          }
 
-         Track *dest;
-         track->Copy(mT0, mT1, &dest);
+         auto dest = track->Copy(mT0, mT1);
          for(int j=0; j<repeatCount; j++)
          {
-            if (!track->Paste(tc, dest) ||
+            if (!track->Paste(tc, dest.get()) ||
                   TrackProgress(nTrack, j / repeatCount)) // TrackProgress returns true on Cancel.
             {
                bGoodResult = false;
@@ -148,7 +149,6 @@ bool EffectRepeat::Process()
          }
          if (tc > maxDestLen)
             maxDestLen = tc;
-         delete dest;
          nTrack++;
       }
       else if (t->IsSyncLockSelected())
@@ -159,7 +159,7 @@ bool EffectRepeat::Process()
 
    if (bGoodResult)
    {
-      // Select the new bits + original bit
+      // Select the NEW bits + original bit
       mT1 = maxDestLen;
    }
 
@@ -173,16 +173,17 @@ void EffectRepeat::PopulateOrExchange(ShuttleGui & S)
    {
       IntegerValidator<int> vldRepeatCount(&repeatCount);
       vldRepeatCount.SetRange(MIN_Count, 2147483647 / mProjectRate);
-      mRepeatCount = S.AddTextBox(_("Number of times to repeat:"), wxT(""), 12);
+      mRepeatCount = S.AddTextBox(_("Number of repeats to add:"), wxT(""), 12);
       mRepeatCount->SetValidator(vldRepeatCount);
    }
    S.EndHorizontalLay();
 
-   S.StartHorizontalLay(wxCENTER, true);
+   S.StartMultiColumn(1, wxCENTER);
    {
+      mCurrentTime = S.AddVariableText(_("Current selection length: dd:hh:mm:ss"));
       mTotalTime = S.AddVariableText(_("New selection length: dd:hh:mm:ss"));
    }
-   S.EndHorizontalLay();
+   S.EndMultiColumn();
 }
 
 bool EffectRepeat::TransferDataToWindow()
@@ -212,15 +213,31 @@ bool EffectRepeat::TransferDataFromWindow()
 
 void EffectRepeat::DisplayNewTime()
 {
-   TransferDataFromWindow();
+   long l;
+   wxString str;
+   mRepeatCount->GetValue().ToLong(&l);
 
    NumericConverter nc(NumericConverter::TIME,
-                       _("hh:mm:ss"),
-                       (mT1 - mT0) * (repeatCount + 1),
+                       GetSelectionFormat(),
+                       mT1 - mT0,
                        mProjectRate);
 
-   wxString str = _("New selection length: ") + nc.GetString();
+   str = _("Current selection length: ") + nc.GetString();
 
+   mCurrentTime->SetLabel(str);
+   mCurrentTime->SetName(str); // fix for bug 577 (NVDA/Narrator screen readers do not read static text in dialogs)
+
+   if (l > 0) {
+      EnableApply(true);
+      repeatCount = l;
+
+      nc.SetValue((mT1 - mT0) * (repeatCount + 1));
+      str = _("New selection length: ") + nc.GetString();
+   }
+   else {
+      str = _("Warning: No repeats.");
+      EnableApply(false);
+   }
    mTotalTime->SetLabel(str);
    mTotalTime->SetName(str); // fix for bug 577 (NVDA/Narrator screen readers do not read static text in dialogs)
 }

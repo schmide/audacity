@@ -24,23 +24,27 @@
 private:
 void CreateMenusAndCommands();
 
-void PopulateEffectsMenu(CommandManager *c, EffectType type, int batchflags, int realflags);
-void AddEffectMenuItems(CommandManager *c, EffectPlugs & plugs, int batchflags, int realflags, bool isDefault);
-void AddEffectMenuItemGroup(CommandManager *c, const wxArrayString & names, const PluginIDList & plugs, const wxArrayInt & flags, bool isDefault);
+void PopulateEffectsMenu(CommandManager *c, EffectType type,
+                         CommandFlag batchflags, CommandFlag realflags);
+void AddEffectMenuItems(CommandManager *c, EffectPlugs & plugs,
+                        CommandFlag batchflags, CommandFlag realflags, bool isDefault);
+void AddEffectMenuItemGroup(CommandManager *c, const wxArrayString & names,
+                            const PluginIDList & plugs,
+                            const std::vector<CommandFlag> & flags, bool isDefault);
 void CreateRecentFilesMenu(CommandManager *c);
 void ModifyUndoMenuItems();
 void ModifyToolbarMenus();
 // Calls ModifyToolbarMenus() on all projects
 void ModifyAllProjectToolbarMenus();
 
-int GetFocusedFrame();
-wxUint32 GetUpdateFlags();
+CommandFlag GetFocusedFrame();
+CommandFlag GetUpdateFlags();
 
 double NearestZeroCrossing(double t0);
 
 public:
 //Adds label and returns index of label in labeltrack.
-int DoAddLabel(const SelectedRegion& region);
+int DoAddLabel(const SelectedRegion& region, bool preserveFocus = false);
 
 private:
 
@@ -76,6 +80,7 @@ void OnSeekRightLong();
 
 bool MakeReadyToPlay(bool loop = false, bool cutpreview = false); // Helper function that sets button states etc.
 void OnPlayStop();
+bool DoPlayStopSelect(bool click, bool shift);
 void OnPlayStopSelect();
 void OnPlayOneSecond();
 void OnPlayToSelection();
@@ -104,6 +109,9 @@ void OnTrackMoveUp();
 void OnTrackMoveDown();
 void OnTrackMoveTop();
 void OnTrackMoveBottom();
+
+enum MoveChoice { OnMoveUpID, OnMoveDownID, OnMoveTopID, OnMoveBottomID };
+void MoveTrack(Track* target, MoveChoice choice);
 
         // Device control
 void OnInputDevice();
@@ -167,7 +175,7 @@ void OnZeroCrossing();
 void OnLockPlayRegion();
 void OnUnlockPlayRegion();
 
-double GetTime(Track *t);
+double GetTime(const Track *t);
 void OnSortTime();
 void OnSortName();
 
@@ -175,6 +183,12 @@ void OnSnapToOff();
 void OnSnapToNearest();
 void OnSnapToPrior();
 void OnFullScreen();
+
+static void DoMacMinimize(AudacityProject *project);
+void OnMacMinimize();
+void OnMacMinimizeAll();
+void OnMacZoom();
+void OnMacBringAllToFront();
 
         // File Menu
 
@@ -259,7 +273,7 @@ void OnSelectAllTracks();
 
 void OnZoomIn();
 void OnZoomOut();
-void OnZoomToggle();
+// void OnZoomToggle();
 void OnZoomNormal();
 void OnZoomFit();
 void OnZoomFitV();
@@ -295,18 +309,19 @@ void OnShowSelectionToolBar();
 #ifdef EXPERIMENTAL_SPECTRAL_EDITING
 void OnShowSpectralSelectionToolBar();
 #endif
+void OnShowScrubbingToolBar();
 void OnShowToolsToolBar();
 void OnShowTranscriptionToolBar();
 void OnResetToolBars();
-void OnSimplifiedView();
 
         // Transport Menu
 
 void OnSoundActivated();
 void OnToggleSoundActivated();
+void OnTogglePinnedHead();
 void OnTogglePlayRecording();
 void OnToggleSWPlaythrough();
-#ifdef AUTOMATED_INPUT_LEVEL_ADJUSTMENT
+#ifdef EXPERIMENTAL_AUTOMATED_INPUT_LEVEL_ADJUSTMENT
    void OnToogleAutomatedInputLevelAdjustment();
 #endif
 void OnRescanDevices();
@@ -315,16 +330,18 @@ void OnRescanDevices();
 void OnImport();
 void OnImportLabels();
 void OnImportMIDI();
+void DoImportMIDI(const wxString &fileName);
 void OnImportRaw();
 
 void OnEditMetadata();
+bool DoEditMetadata(const wxString &title, const wxString &shortUndoDescription, bool force);
 
 void OnMixAndRender();
 void OnMixAndRenderToNewTrack();
 void HandleMixAndRender(bool toNewTrack);
 
 private:
-SelectedRegion mRegionSave;
+   SelectedRegion mRegionSave{};
 public:
 void OnSelectionSave();
 void OnSelectionRestore();
@@ -354,6 +371,7 @@ void OnRemoveTracks();
 void OnSyncLock();
 void OnAddLabel();
 void OnAddLabelPlaying();
+void DoEditLabels(LabelTrack *lt = nullptr, int index = -1);
 void OnEditLabels();
 
         // Effect Menu
@@ -367,6 +385,8 @@ public:
    static const int kConfigured = 0x01;
    // Flag used to disable saving the state after processing.
    static const int kSkipState  = 0x02;
+   // Flag used to disable "Repeat Last Effect"
+   static const int kDontRepeatLast = 0x04;
 };
 
 bool OnEffect(const PluginID & ID, int flags = OnEffectFlags::kNone);
@@ -374,7 +394,10 @@ void OnRepeatLastEffect(int index);
 void OnApplyChain();
 void OnEditChains();
 void OnStereoToMono(int index);
+void OnManagePluginsMenu(EffectType Type);
+void OnManageGenerators();
 void OnManageEffects();
+void OnManageAnalyzers();
 
         // Help Menu
 
@@ -397,6 +420,7 @@ void OnSeparator();
 
       // Keyboard navigation
 
+void NextOrPrevFrame(bool next);
 void PrevFrame();
 void NextFrame();
 
@@ -404,6 +428,22 @@ void PrevWindow();
 void NextWindow();
 
 void OnResample();
+
+private:
+void OnCursorLeft(bool shift, bool ctrl, bool keyup = false);
+void OnCursorRight(bool shift, bool ctrl, bool keyup = false);
+void OnCursorMove(bool forward, bool jump, bool longjump);
+void OnBoundaryMove(bool left, bool boundaryContract);
+
+// Handle small cursor and play head movements
+void SeekLeftOrRight
+(bool left, bool shift, bool ctrl, bool keyup,
+ int snapToTime, bool mayAccelerateQuiet, bool mayAccelerateAudio,
+ double quietSeekStepPositive, bool quietStepIsPixels,
+ double audioSeekStepPositive, bool audioStepIsPixels);
+
+// Helper for moving by keyboard with snap-to-grid enabled
+double GridMove(double t, int minPix);
 
 // Make sure we return to "public" for subsequent declarations in Project.h.
 public:

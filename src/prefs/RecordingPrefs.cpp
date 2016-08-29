@@ -19,23 +19,34 @@
 *//********************************************************************/
 
 #include "../Audacity.h"
+#include "RecordingPrefs.h"
 
 #include <wx/defs.h>
 #include <wx/textctrl.h>
 #include <algorithm>
 
 #include "../AudioIO.h"
-#include "../Envelope.h"
+#include "../prefs/GUISettings.h"
 #include "../Prefs.h"
 #include "../ShuttleGui.h"
 
-#include "RecordingPrefs.h"
+#include "../Experimental.h"
 
 using std::min;
+
+enum {
+   UseCustomTrackNameID = 1000,
+};
+
+BEGIN_EVENT_TABLE(RecordingPrefs, PrefsPanel)
+   EVT_CHECKBOX(UseCustomTrackNameID, RecordingPrefs::OnToggleCustomName)
+END_EVENT_TABLE()
 
 RecordingPrefs::RecordingPrefs(wxWindow * parent)
 :  PrefsPanel(parent, _("Recording"))
 {
+   gPrefs->Read(wxT("/GUI/TrackNames/RecordingNameCustom"), &mUseCustomTrackName, false);
+   mOldNameChoice = mUseCustomTrackName;
    Populate();
 }
 
@@ -113,7 +124,7 @@ void RecordingPrefs::PopulateOrExchange(ShuttleGui & S)
       {
          S.SetStretchyCol(1);
 
-         int dBRange = gPrefs->Read(wxT("/GUI/EnvdBRange"), ENV_DB_RANGE);
+         int dBRange = gPrefs->Read(ENV_DB_KEY, ENV_DB_RANGE);
          S.TieSlider(_("Sound Activation Le&vel (dB):"),
                      wxT("/AudioIO/SilenceLevel"),
                      -50,
@@ -124,7 +135,38 @@ void RecordingPrefs::PopulateOrExchange(ShuttleGui & S)
    }
    S.EndStatic();
 
-   #ifdef AUTOMATED_INPUT_LEVEL_ADJUSTMENT
+   S.StartStatic(_("Naming newly recorded tracks"));
+   {
+      S.StartMultiColumn(3);
+      {
+      S.Id(UseCustomTrackNameID).TieCheckBox(_("Use Custom Track &Name"),
+                                         wxT("/GUI/TrackNames/RecordingNameCustom"),
+                                         mUseCustomTrackName ? true : false);
+
+         mToggleCustomName = S.TieTextBox(wxT(""),
+                                           wxT("/GUI/TrackNames/RecodingTrackName"),
+                                          _("Recorded_Audio"),
+                                          30);
+         mToggleCustomName->SetName(_("Custom name text"));
+         mToggleCustomName->Enable(mUseCustomTrackName);
+      }
+      S.EndMultiColumn();
+
+      S.TieCheckBox(_("Add &Track Number"),
+                    wxT("/GUI/TrackNames/TrackNumber"),
+                    false);
+
+      S.TieCheckBox(_("Add System &Date"),
+                    wxT("/GUI/TrackNames/DateStamp"),
+                    false);
+
+      S.TieCheckBox(_("Add System T&ime"),
+                    wxT("/GUI/TrackNames/TimeStamp"),
+                    false);
+   }
+   S.EndStatic();
+
+   #ifdef EXPERIMENTAL_AUTOMATED_INPUT_LEVEL_ADJUSTMENT
       S.StartStatic(_("Automated Recording Level Adjustment"));
       {
          S.TieCheckBox(_("Enable Automated Recording Level Adjustment."),
@@ -181,14 +223,13 @@ bool RecordingPrefs::Apply()
       gPrefs->Write(wxT("/AudioIO/LatencyDuration"), DEFAULT_LATENCY_DURATION);
    }
 
-   #ifdef AUTOMATED_INPUT_LEVEL_ADJUSTMENT
+   #ifdef EXPERIMENTAL_AUTOMATED_INPUT_LEVEL_ADJUSTMENT
       double targetpeak, deltapeak;
       gPrefs->Read(wxT("/AudioIO/TargetPeak"),  &targetpeak);
       gPrefs->Read(wxT("/AudioIO/DeltaPeakVolume"), &deltapeak);
       if (targetpeak + deltapeak > 100.0 || targetpeak - deltapeak < 0.0)
       {
          gPrefs->Write(wxT("/AudioIO/DeltaPeakVolume"), min(100.0 - targetpeak, targetpeak));
-         gPrefs->Flush();
       }
 
       int value;
@@ -200,5 +241,17 @@ bool RecordingPrefs::Apply()
       if (value < 0)
          gPrefs->Write(wxT("/AudioIO/NumberAnalysis"), AILA_DEF_NUMBER_ANALYSIS);
    #endif
-   return gPrefs->Flush();
+   return true;
+}
+
+void RecordingPrefs::OnToggleCustomName(wxCommandEvent & Evt)
+{
+   mUseCustomTrackName = !mUseCustomTrackName;
+   mToggleCustomName->Enable(mUseCustomTrackName);
+}
+
+PrefsPanel *RecordingPrefsFactory::Create(wxWindow *parent)
+{
+   wxASSERT(parent); // to justify safenew
+   return safenew RecordingPrefs(parent);
 }

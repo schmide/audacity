@@ -37,7 +37,8 @@ using namespace Vamp::HostExt;
 DECLARE_MODULE_ENTRY(AudacityModule)
 {
    // Create and register the importer
-   return new VampEffectsModule(moduleManager, path);
+   // Trust the module manager not to leak this
+   return safenew VampEffectsModule(moduleManager, path);
 }
 
 // ============================================================================
@@ -131,7 +132,7 @@ wxArrayString VampEffectsModule::FindPlugins(PluginManagerInterface & WXUNUSED(p
 
    for (PluginLoader::PluginKeyList::iterator i = keys.begin(); i != keys.end(); ++i)
    {
-      Plugin *vp = PluginLoader::getInstance()->loadPlugin(*i, 48000); // rate doesn't matter here
+      std::unique_ptr<Plugin> vp{ PluginLoader::getInstance()->loadPlugin(*i, 48000) }; // rate doesn't matter here
       if (!vp)
       {
          continue;
@@ -193,8 +194,6 @@ wxArrayString VampEffectsModule::FindPlugins(PluginManagerInterface & WXUNUSED(p
 
          ++output;
       }
-
-      delete vp;
    }
 
    return names;
@@ -205,10 +204,10 @@ bool VampEffectsModule::RegisterPlugin(PluginManagerInterface & pm, const wxStri
    int output;
    bool hasParameters;
 
-   Plugin *vp = FindPlugin(path, output, hasParameters);
+   auto vp = FindPlugin(path, output, hasParameters);
    if (vp)
    {
-      VampEffect effect(vp, path, output, hasParameters);
+      VampEffect effect(std::move(vp), path, output, hasParameters);
       pm.RegisterPlugin(this, &effect);
 
       return true;
@@ -222,25 +221,21 @@ bool VampEffectsModule::IsPluginValid(const wxString & path)
    int output;
    bool hasParameters;
 
-   Plugin *vp = FindPlugin(path, output, hasParameters);
-   if (vp)
-   {
-      delete vp;
-      return true;
-   }
-
-   return false;
+   auto vp = FindPlugin(path, output, hasParameters);
+   return bool(vp);
 }
 
 IdentInterface *VampEffectsModule::CreateInstance(const wxString & path)
 {
+   // Acquires a resource for the application.
    int output;
    bool hasParameters;
 
-   Plugin *vp = FindPlugin(path, output, hasParameters);
+   auto vp = FindPlugin(path, output, hasParameters);
    if (vp)
    {
-      return new VampEffect(vp, path, output, hasParameters);
+      // Safety of this depends on complementary calls to DeleteInstance on the module manager side.
+      return safenew VampEffect(std::move(vp), path, output, hasParameters);
    }
 
    return NULL;
@@ -248,25 +243,23 @@ IdentInterface *VampEffectsModule::CreateInstance(const wxString & path)
 
 void VampEffectsModule::DeleteInstance(IdentInterface *instance)
 {
-   VampEffect *effect = dynamic_cast<VampEffect *>(instance);
-   if (effect)
-   {
-      delete effect;
-   }
+   std::unique_ptr < VampEffect > {
+      dynamic_cast<VampEffect *>(instance)
+   };
 }
 
 // VampEffectsModule implementation
 
-Plugin *VampEffectsModule::FindPlugin(const wxString & path,
+std::unique_ptr<Vamp::Plugin> VampEffectsModule::FindPlugin(const wxString & path,
                                       int & output,
                                       bool & hasParameters)
 {
    PluginLoader::PluginKey key = path.BeforeLast(wxT('/')).ToUTF8().data();
 
-   Plugin *vp = PluginLoader::getInstance()->loadPlugin(key, 48000); // rate doesn't matter here
+   std::unique_ptr<Plugin> vp{ PluginLoader::getInstance()->loadPlugin(key, 48000) }; // rate doesn't matter here
    if (!vp)
    {
-      return false;
+      return nullptr;
    }
 
    // We limit the listed plugin outputs to those whose results can
@@ -330,9 +323,7 @@ Plugin *VampEffectsModule::FindPlugin(const wxString & path,
       ++output;
    }
 
-   delete vp;
-
-   return NULL;
+   return {};
 }
 
 #endif

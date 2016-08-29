@@ -8,12 +8,13 @@
 
 **********************************************************************/
 
+#include "../Audacity.h"
+#include "ImportMIDI.h"
+
 #include <wx/defs.h>
 #include <wx/msgdlg.h>
 #include <wx/ffile.h>
 #include <wx/intl.h>
-
-#include "../Audacity.h"
 
 #if defined(USE_MIDI)
 
@@ -23,9 +24,8 @@
 
 #include "../Internat.h"
 #include "../NoteTrack.h"
-#include "ImportMIDI.h"
 
-bool ImportMIDI(wxString fName, NoteTrack * dest)
+bool ImportMIDI(const wxString &fName, NoteTrack * dest)
 {
    if (fName.Length() <= 4){
       wxMessageBox( _("Could not open file ") + fName + _(": Filename too short."));
@@ -47,29 +47,28 @@ bool ImportMIDI(wxString fName, NoteTrack * dest)
    }
 
    double offset = 0.0;
-   Alg_seq_ptr new_seq = new Alg_seq(fName.mb_str(), is_midi, &offset);
+   auto new_seq = std::make_unique<Alg_seq>(fName.mb_str(), is_midi, &offset);
 
    //Should we also check if(seq->tracks() == 0) ?
    if(new_seq->get_read_error() == alg_error_open){
       wxMessageBox( _("Could not open file ") + fName + wxT("."));
       mf.Close();
-      delete new_seq;
       return false;
    }
 
-   dest->SetSequence(new_seq);
+   dest->SetSequence(std::move(new_seq));
    dest->SetOffset(offset);
    wxString trackNameBase = fName.AfterLast(wxFILE_SEP_PATH).BeforeLast('.');
    dest->SetName(trackNameBase);
    mf.Close();
    // the mean pitch should be somewhere in the middle of the display
-   Alg_iterator iterator(new_seq, false);
+   Alg_iterator iterator(dest->GetSequence(), false);
    iterator.begin();
    // for every event
    Alg_event_ptr evt;
    int note_count = 0;
    int pitch_sum = 0;
-   while ((evt = iterator.next())) {
+   while (NULL != (evt = iterator.next())) {
       // if the event is a note
        if (evt->get_type() == 'n') {
            Alg_note_ptr note = (Alg_note_ptr) evt;

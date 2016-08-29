@@ -15,6 +15,8 @@
 
 #include "DeviceChange.h"
 
+#include "Experimental.h"
+
 #if defined(EXPERIMENTAL_DEVICE_CHANGE_HANDLER)
 
 #if defined(HAVE_DEVICE_CHANGE)
@@ -33,7 +35,7 @@ DEFINE_EVENT_TYPE(EVT_DEVICE_CHANGE);
 #include <mmdeviceapi.h>
 #include <audioclient.h>
 
-class DeviceChangeListener : public IMMNotificationClient,
+class DeviceChangeListener final : public IMMNotificationClient,
                              public DeviceChangeInterface
 {
 public:
@@ -172,7 +174,7 @@ private:
 #include <locale.h>
 #include <unistd.h>
 
-class DeviceChangeListener : public DeviceChangeInterface
+class DeviceChangeListener final : public DeviceChangeInterface
 {
 public:
    DeviceChangeListener()
@@ -277,7 +279,7 @@ private:
 
 #include <CoreAudio/CoreAudio.h>
 
-class DeviceChangeListener : public DeviceChangeInterface
+class DeviceChangeListener final : public DeviceChangeInterface
 {
 public:
    DeviceChangeListener()
@@ -371,7 +373,7 @@ DeviceChangeHandler::DeviceChangeHandler()
 :  wxEvtHandler()
 {
    mTimer.SetOwner(this);
-   mListener = new DeviceChangeListener();
+   mListener = std::make_unique<DeviceChangeListener>();
    mListener->SetHandler(this);
    mListener->Enable(true);
 }
@@ -379,10 +381,7 @@ DeviceChangeHandler::DeviceChangeHandler()
 DeviceChangeHandler::~DeviceChangeHandler()
 {
    if (mListener)
-   {
       mListener->Enable(false);
-      delete mListener;
-   }
 }
 
 void DeviceChangeHandler::Enable(bool enable)

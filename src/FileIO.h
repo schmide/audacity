@@ -11,6 +11,7 @@
 #ifndef __AUDACITY_FILEIO__
 #define __AUDACITY_FILEIO__
 
+#include "MemoryX.h"
 #include <wx/object.h>
 #include <wx/wfstream.h>
 
@@ -34,16 +35,11 @@ class FileIO
    wxInputStream & Read(void *buffer, size_t size);
    wxOutputStream & Write(const void *buffer, size_t size);
 
-   // On the Mac, this sets the file type and creator.  It does nothing on
-   // other platforms.
-   void SetCatalogInfo();
-   void SetCatalogInfo(wxUint32 type);
-
  private:
    wxString mName;
    FileIOMode mMode;
-   wxInputStream *mInputStream;
-   wxOutputStream *mOutputStream;
+   std::unique_ptr<wxInputStream> mInputStream;
+   std::unique_ptr<wxOutputStream> mOutputStream;
    bool mOpen;
 };
 

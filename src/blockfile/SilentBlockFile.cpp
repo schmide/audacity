@@ -8,11 +8,12 @@
 
 **********************************************************************/
 
+#include "../Audacity.h"
 #include "SilentBlockFile.h"
 #include "../FileFormats.h"
 
 SilentBlockFile::SilentBlockFile(sampleCount sampleLen):
-   BlockFile(wxFileName(), sampleLen)
+BlockFile{ wxFileNameWrapper{}, sampleLen }
 {
    mMin = 0.;
    mMax = 0.;
@@ -30,7 +31,7 @@ bool SilentBlockFile::ReadSummary(void *data)
 }
 
 int SilentBlockFile::ReadData(samplePtr data, sampleFormat format,
-                              sampleCount WXUNUSED(start), sampleCount len)
+                              sampleCount WXUNUSED(start), sampleCount len) const
 {
    ClearSamples(data, format, 0, len);
 
@@ -50,7 +51,7 @@ void SilentBlockFile::SaveXML(XMLWriter &xmlFile)
 // even if the result is flawed (e.g., refers to nonexistent file),
 // as testing will be done in DirManager::ProjectFSCK().
 /// static
-BlockFile *SilentBlockFile::BuildFromXML(DirManager & WXUNUSED(dm), const wxChar **attrs)
+BlockFilePtr SilentBlockFile::BuildFromXML(DirManager & WXUNUSED(dm), const wxChar **attrs)
 {
    long nValue;
    sampleCount len = 0;
@@ -70,18 +71,18 @@ BlockFile *SilentBlockFile::BuildFromXML(DirManager & WXUNUSED(dm), const wxChar
          len = nValue;
    }
 
-   return new SilentBlockFile(len);
+   return make_blockfile<SilentBlockFile>(len);
 }
 
 /// Create a copy of this BlockFile
-BlockFile *SilentBlockFile::Copy(wxFileName newFileName)
+BlockFilePtr SilentBlockFile::Copy(wxFileNameWrapper &&)
 {
-   BlockFile *newBlockFile = new SilentBlockFile(mLen);
+   auto newBlockFile = make_blockfile<SilentBlockFile>(mLen);
 
    return newBlockFile;
 }
 
-wxLongLong SilentBlockFile::GetSpaceUsage()
+wxLongLong SilentBlockFile::GetSpaceUsage() const
 {
    return 0;
 }

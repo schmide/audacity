@@ -14,12 +14,15 @@
 
 **********************************************************************/
 
-#include "../Prefs.h"
-
 #include "Generator.h"
+
+#include "../Project.h"
+#include "../Prefs.h"
+#include "../WaveTrack.h"
+
 #include "TimeWarper.h"
 
-#include <memory>
+#include "../MemoryX.h"
 
 bool Generator::Process()
 {
@@ -34,7 +37,7 @@ bool Generator::Process()
    // Iterate over the tracks
    bool bGoodResult = true;
    int ntrack = 0;
-   TrackListIterator iter(mOutputTracks);
+   TrackListIterator iter(mOutputTracks.get());
    Track* t = iter.First();
 
    while (t != NULL)
@@ -60,8 +63,9 @@ bool Generator::Process()
 
          if (GetDuration() > 0.0)
          {
+            AudacityProject *p = GetActiveProject();
             // Create a temporary track
-            std::auto_ptr<WaveTrack> tmp(
+            WaveTrack::Holder tmp(
                mFactory->NewWaveTrack(track->GetSampleFormat(),
                track->GetRate())
             );
@@ -74,8 +78,8 @@ bool Generator::Process()
             else {
                // Transfer the data from the temporary track to the actual one
                tmp->Flush();
-               SetTimeWarper(new StepTimeWarper(mT0+GetDuration(), GetDuration()-(mT1-mT0)));
-               bGoodResult = track->ClearAndPaste(mT0, mT1, &*tmp, true,
+               SetTimeWarper(std::make_unique<StepTimeWarper>(mT0+GetDuration(), GetDuration()-(mT1-mT0)));
+               bGoodResult = track->ClearAndPaste(p->GetSel0(), p->GetSel1(), &*tmp, true,
                      false, GetTimeWarper());
             }
 
@@ -115,14 +119,12 @@ bool BlockGenerator::GenerateTrack(WaveTrack *tmp,
 {
    bool bGoodResult = true;
    numSamples = track.TimeToLongSamples(GetDuration());
-   sampleCount i = 0;
+   decltype(numSamples) i = 0;
    float *data = new float[tmp->GetMaxBlockSize()];
-   sampleCount block = 0;
 
    while ((i < numSamples) && bGoodResult) {
-      block = tmp->GetBestBlockSize(i);
-      if (block > (numSamples - i))
-         block = numSamples - i;
+      const auto block =
+         limitSampleBufferSize( tmp->GetBestBlockSize(i), numSamples - i );
 
       GenerateBlock(data, track, block);
 

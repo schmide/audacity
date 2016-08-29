@@ -21,7 +21,7 @@ in the selection bar of Audacity.
   exact way that a single value is split into several fields,
   such as the hh:mm:ss format.  The advantage of this format string
   is that it is very small and compact, but human-readable and
-  somewhat intuitive, so that it's easy to add new layouts
+  somewhat intuitive, so that it's easy to add NEW layouts
   in the future.  It's also designed to make it easier to add
   i18n support, since the way that numbers are displayed in different
   languages could conceivably vary a lot.
@@ -108,7 +108,7 @@ in the selection bar of Audacity.
   Summary of format string rules:
 
   - The characters '0-9', '*', and '#' are numeric.  Any sequence of
-    these characters is treated as defining a new field by specifying
+    these characters is treated as defining a NEW field by specifying
     its range.  All other characters become delimiters between fields.
     (The one exception is that '.' is treated as numeric after the
     optional '|'.)
@@ -166,15 +166,17 @@ different formats.
 
 
 #include "../Audacity.h"
-#include "../AudacityApp.h"
 #include "NumericTextCtrl.h"
-#include "../Sequence.h"   // for sampleCount
+#include "audacity/Types.h"
+#include "../AudacityApp.h"
 #include "../Theme.h"
 #include "../AllThemeResources.h"
 #include "../AColor.h"
+#include "../Project.h"
 
 #include <algorithm>
 #include <math.h>
+#include <limits>
 
 #include <wx/wx.h>
 #include <wx/dcmemory.h>
@@ -531,6 +533,10 @@ NumericConverter::NumericConverter(Type type,
                                    double value,
                                    double sampleRate)
 {
+   ResetMinValue();
+   ResetMaxValue();
+   mInvalidValue = -1.0;
+
    mDefaultNdx = 0;
 
    mType = type;
@@ -708,11 +714,11 @@ void NumericConverter::ParseFormatString( const wxString & format)
    for(i=0; i<mFields.GetCount(); i++) {
       mFields[i].pos = pos;
 
-      pos += mFields[i].digits;
       for(j=0; j<mFields[i].digits; j++) {
          mDigits.Add(DigitInfo(i, j, pos, wxRect()));
          mValueTemplate += wxT("0");
          mValueMask += wxT("0");
+         pos++;
       }
 
       pos += mFields[i].label.Length();
@@ -745,6 +751,10 @@ void NumericConverter::PrintDebugInfo()
    }
 
    printf("\n");
+}
+
+NumericConverter::~NumericConverter()
+{
 }
 
 void NumericConverter::ValueToControls()
@@ -838,7 +848,9 @@ void NumericConverter::ValueToControls(double rawValue, bool nearest /* = true *
       }
       else {
          if (t_int >= 0) {
-            value = (t_int / mFields[i].base);
+            // UNSAFE_SAMPLE_COUNT_TRUNCATION
+            // truncation danger!
+            value = (static_cast<long long>( t_int ) / mFields[i].base);
             if (mFields[i].range > 0)
                value = value % mFields[i].range;
          }
@@ -863,7 +875,7 @@ void NumericConverter::ControlsToValue()
 
    if (mFields.GetCount() > 0 &&
       mValueString.Mid(mFields[0].pos, 1) == wxChar('-')) {
-      mValue = -1;
+      mValue = mInvalidValue;
       return;
    }
 
@@ -904,7 +916,7 @@ void NumericConverter::ControlsToValue()
       t = frames * 1.001 / 30.;
    }
 
-   mValue = t;
+   mValue = std::max(mMinValue, std::min(mMaxValue, t));
 }
 
 void NumericConverter::SetFormatName(const wxString & formatName)
@@ -933,6 +945,35 @@ void NumericConverter::SetValue(double newValue)
    mValue = newValue;
    ValueToControls();
    ControlsToValue();
+}
+
+void NumericConverter::SetMinValue(double minValue)
+{
+   mMinValue = minValue;
+   if (mMaxValue < minValue)
+      mMaxValue = minValue;
+   if (mValue < minValue)
+      SetValue(minValue);
+}
+
+void NumericConverter::ResetMinValue()
+{
+   mMinValue = 0.0;
+}
+
+void NumericConverter::SetMaxValue(double maxValue)
+{
+   mMaxValue = maxValue;
+   if (mMinValue > maxValue) {
+      mMinValue = maxValue;
+   }
+   if (mValue > maxValue)
+      SetValue(maxValue);
+}
+
+void NumericConverter::ResetMaxValue()
+{
+   mMaxValue = std::numeric_limits<double>::max();
 }
 
 double NumericConverter::GetValue()
@@ -1019,6 +1060,12 @@ void NumericConverter::Decrement()
 
 void NumericConverter::Adjust(int steps, int dir)
 {
+   // It is possible and "valid" for steps to be zero if a
+   // high precision device is being used and wxWidgets supports
+   // reporting a higher precision...Mac wx3 does.
+   if (steps == 0)
+      return;
+
    wxASSERT(dir == -1 || dir == 1);
    wxASSERT(steps > 0);
    if (steps < 0)
@@ -1073,6 +1120,8 @@ void NumericConverter::Adjust(int steps, int dir)
                mValue = 0.;
             }
 
+            mValue = std::max(mMinValue, std::min(mMaxValue, mValue));
+
             mValue /= mScalingFactor;
 
             if (!mNtscDrop)
@@ -1120,7 +1169,7 @@ IMPLEMENT_CLASS(NumericTextCtrl, wxControl)
 NumericTextCtrl::NumericTextCtrl(NumericConverter::Type type,
                            wxWindow *parent,
                            wxWindowID id,
-                           wxString formatName,
+                           const wxString &formatName,
                            double timeValue,
                            double sampleRate,
                            const wxPoint &pos,
@@ -1128,13 +1177,14 @@ NumericTextCtrl::NumericTextCtrl(NumericConverter::Type type,
                            bool autoPos):
    wxControl(parent, id, pos, size, wxSUNKEN_BORDER | wxWANTS_CHARS),
    NumericConverter(type, formatName, timeValue, sampleRate),
-   mBackgroundBitmap(NULL),
-   mDigitFont(NULL),
-   mLabelFont(NULL),
+   mBackgroundBitmap{},
+   mDigitFont{},
+   mLabelFont{},
    mLastField(1),
    mAutoPos(autoPos)
    , mType(type)
 {
+   mAllowInvalidValue = false;
 
    mDigitBoxW = 10;
    mDigitBoxH = 16;
@@ -1157,26 +1207,17 @@ NumericTextCtrl::NumericTextCtrl(NumericConverter::Type type,
 #if wxUSE_ACCESSIBILITY
    SetLabel(wxT(""));
    SetName(wxT(""));
-   SetAccessible(new NumericTextCtrlAx(this));
+   SetAccessible(safenew NumericTextCtrlAx(this));
 #endif
 }
 
 NumericTextCtrl::~NumericTextCtrl()
 {
-   wxCommandEvent e(EVT_RELEASE_KEYBOARD);
-   e.SetEventObject(this);
-   GetParent()->GetEventHandler()->ProcessEvent(e);
-
-   if (mBackgroundBitmap)
-      delete mBackgroundBitmap;
-   if (mDigitFont)
-      delete mDigitFont;
-   if (mLabelFont)
-      delete mLabelFont;
 }
 
 // Set the focus to the first (left-most) non-zero digit
 // If all digits are zero, the right-most position is focused
+// If all digits are hyphens (invalid), the left-most position is focused
 void NumericTextCtrl::UpdateAutoFocus()
 {
    if (!mAutoPos)
@@ -1246,18 +1287,24 @@ void NumericTextCtrl::EnableMenu(bool enable)
    Fit();
 }
 
+void NumericTextCtrl::SetInvalidValue(double invalidValue)
+{
+   const bool wasInvalid = mAllowInvalidValue && (mValue == mInvalidValue);
+   mAllowInvalidValue = true;
+   mInvalidValue = invalidValue;
+   if (wasInvalid)
+      SetValue(invalidValue);
+}
+
 bool NumericTextCtrl::Layout()
 {
    unsigned int i, j;
    int x, pos;
 
    wxMemoryDC memDC;
-   if (mBackgroundBitmap) {
-      delete mBackgroundBitmap;
-      mBackgroundBitmap = NULL;
-   }
+
    // Placeholder bitmap so the memDC has something to reference
-   mBackgroundBitmap = new wxBitmap(1, 1);
+   mBackgroundBitmap = std::make_unique<wxBitmap>(1, 1);
    memDC.SelectObject(*mBackgroundBitmap);
 
    mDigits.Clear();
@@ -1281,9 +1328,7 @@ bool NumericTextCtrl::Layout()
    }
    fontSize--;
 
-   if (mDigitFont)
-      delete mDigitFont;
-   mDigitFont = new wxFont(fontSize, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
+   mDigitFont = std::make_unique<wxFont>(fontSize, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
    memDC.SetFont(*mDigitFont);
    memDC.GetTextExtent(exampleText, &strW, &strH);
    mDigitW = strW;
@@ -1291,9 +1336,7 @@ bool NumericTextCtrl::Layout()
 
    // The label font should be a little smaller
    fontSize--;
-   if (mLabelFont)
-      delete mLabelFont;
-   mLabelFont = new wxFont(fontSize, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
+   mLabelFont = std::make_unique<wxFont>(fontSize, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
 
    // Figure out the x-position of each field and label in the box
    x = mBorderLeft;
@@ -1328,8 +1371,7 @@ bool NumericTextCtrl::Layout()
 
    wxBrush Brush;
 
-   delete mBackgroundBitmap; // Delete placeholder
-   mBackgroundBitmap = new wxBitmap(mWidth + mButtonWidth, mHeight);
+   mBackgroundBitmap = std::make_unique<wxBitmap>(mWidth + mButtonWidth, mHeight);
    memDC.SelectObject(*mBackgroundBitmap);
 
    memDC.SetBrush(*wxLIGHT_GREY_BRUSH);
@@ -1531,13 +1573,12 @@ void NumericTextCtrl::OnMouse(wxMouseEvent &event)
 
 void NumericTextCtrl::OnFocus(wxFocusEvent &event)
 {
-   wxCommandEvent e(EVT_CAPTURE_KEYBOARD);
-
    if (event.GetEventType() == wxEVT_KILL_FOCUS) {
-      e.SetEventType(EVT_RELEASE_KEYBOARD);
+      AudacityProject::ReleaseKeyboard(this);
    }
-   e.SetEventObject(this);
-   GetParent()->GetEventHandler()->ProcessEvent(e);
+   else {
+      AudacityProject::CaptureKeyboard(this);
+   }
 
    Refresh(false);
 }
@@ -1548,7 +1589,8 @@ void NumericTextCtrl::OnCaptureKey(wxCommandEvent &event)
    int keyCode = kevent->GetKeyCode();
 
    // Convert numeric keypad entries.
-   if ((keyCode >= WXK_NUMPAD0) && (keyCode <= WXK_NUMPAD9)) keyCode -= WXK_NUMPAD0 - '0';
+   if ((keyCode >= WXK_NUMPAD0) && (keyCode <= WXK_NUMPAD9))
+      keyCode -= WXK_NUMPAD0 - '0';
 
    switch (keyCode)
    {
@@ -1562,6 +1604,7 @@ void NumericTextCtrl::OnCaptureKey(wxCommandEvent &event)
       case WXK_TAB:
       case WXK_RETURN:
       case WXK_NUMPAD_ENTER:
+      case WXK_DELETE:
          return;
 
       default:
@@ -1584,6 +1627,7 @@ void NumericTextCtrl::OnKeyUp(wxKeyEvent &event)
       keyCode -= WXK_NUMPAD0 - '0';
 
    if ((keyCode >= '0' && keyCode <= '9') ||
+       (keyCode == WXK_DELETE) ||
        (keyCode == WXK_BACK) ||
        (keyCode == WXK_UP) ||
        (keyCode == WXK_DOWN)) {
@@ -1599,7 +1643,7 @@ void NumericTextCtrl::OnKeyDown(wxKeyEvent &event)
       return;
    }
 
-   event.Skip();
+   event.Skip(false);
 
    int keyCode = event.GetKeyCode();
    int digit = mFocusedDigit;
@@ -1610,21 +1654,28 @@ void NumericTextCtrl::OnKeyDown(wxKeyEvent &event)
       mFocusedDigit = mDigits.GetCount()-1;
 
    // Convert numeric keypad entries.
-   if ((keyCode >= WXK_NUMPAD0) && (keyCode <= WXK_NUMPAD9)) keyCode -= WXK_NUMPAD0 - '0';
+   if ((keyCode >= WXK_NUMPAD0) && (keyCode <= WXK_NUMPAD9))
+      keyCode -= WXK_NUMPAD0 - '0';
 
    if (!mReadOnly && (keyCode >= '0' && keyCode <= '9')) {
       int digitPosition = mDigits[mFocusedDigit].pos;
       if (mValueString[digitPosition] == wxChar('-')) {
-         mValue = 0;
+         mValue = std::max(mMinValue, std::min(mMaxValue, 0.0));
          ValueToControls();
          // Beware relocation of the string
          digitPosition = mDigits[mFocusedDigit].pos;
       }
       mValueString[digitPosition] = wxChar(keyCode);
       ControlsToValue();
+      Refresh();// Force an update of the control. [Bug 1497]
       ValueToControls();
       mFocusedDigit = (mFocusedDigit + 1) % (mDigits.GetCount());
       Updated();
+   }
+
+   else if (!mReadOnly && keyCode == WXK_DELETE) {
+      if (mAllowInvalidValue)
+         SetValue(mInvalidValue);
    }
 
    else if (!mReadOnly && keyCode == WXK_BACK) {
@@ -1636,6 +1687,7 @@ void NumericTextCtrl::OnKeyDown(wxKeyEvent &event)
       if (theDigit != wxChar('-'))
          theDigit = '0';
       ControlsToValue();
+      Refresh();// Force an update of the control. [Bug 1497]
       ValueToControls();
       Updated();
    }
@@ -1674,14 +1726,9 @@ void NumericTextCtrl::OnKeyDown(wxKeyEvent &event)
    }
 
    else if (keyCode == WXK_TAB) {
-      wxWindow *parent = GetParent();
-      wxNavigationKeyEvent nevent;
-      nevent.SetWindowChange(event.ControlDown());
-      nevent.SetDirection(!event.ShiftDown());
-      nevent.SetEventObject(parent);
-      nevent.SetCurrentFocus(parent);
-      GetParent()->GetEventHandler()->ProcessEvent(nevent);
-      event.Skip(false);
+      Navigate(event.ShiftDown()
+               ? wxNavigationKeyEvent::IsBackward
+               : wxNavigationKeyEvent::IsForward);
    }
 
    else if (keyCode == WXK_RETURN || keyCode == WXK_NUMPAD_ENTER) {
@@ -1691,7 +1738,6 @@ void NumericTextCtrl::OnKeyDown(wxKeyEvent &event)
          wxCommandEvent cevent(wxEVT_COMMAND_BUTTON_CLICKED,
                                def->GetId());
          GetParent()->GetEventHandler()->ProcessEvent(cevent);
-         event.Skip(false);
       }
    }
 
@@ -1758,8 +1804,19 @@ void NumericTextCtrl::Updated(bool keyup /* = false */)
 
 void NumericTextCtrl::ValueToControls()
 {
+   const wxString previousValueString = mValueString;
    NumericConverter::ValueToControls(mValue);
-   Refresh(false);
+   if (mValueString != previousValueString) {
+      // Doing this only when needed is an optimization.
+      // NumerixTextCtrls are used in the selection bar at the bottom
+      // of Audacity, and are updated at high frequency through
+      // SetValue() when Audacity is playing. This consumes a
+      // significant amount of CPU. Typically, when a track is
+      // playing, only one of the NumericTextCtrl actually changes
+      // (the audio position). We save CPU by updating the control
+      // only when needed.
+      Refresh(false);
+   }
 }
 
 
@@ -1928,7 +1985,7 @@ wxAccStatus NumericTextCtrlAx::GetName(int childId, wxString *name)
       int cnt = mFields.GetCount();
       wxString decimal = wxLocale::GetInfo(wxLOCALE_DECIMAL_POINT, wxLOCALE_CAT_NUMBER);
 
-      // If the new field is the last field, then check it to see if
+      // If the NEW field is the last field, then check it to see if
       // it represents fractions of a second.
       // PRL: click a digit of the control and use left and right arrow keys
       // to exercise this code

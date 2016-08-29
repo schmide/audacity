@@ -32,6 +32,8 @@
 #ifndef __AUDACITY_FFT_H__
 #define __AUDACITY_FFT_H__
 
+#include <wx/defs.h>
+
 /*
   Salvo Ventura - November 2006
   Added more window functions:
@@ -42,6 +44,9 @@
     * 8: Gaussian(a=3.5)
     * 9: Gaussian(a=4.5)
 */
+
+#include <wx/defs.h>
+#include <wx/wxchar.h>
 
 #ifndef M_PI
 #define	M_PI		3.14159265358979323846  /* pi */
@@ -56,7 +61,7 @@
  * input array, and that NumSamples must be a power of two.
  */
 
-void PowerSpectrum(int NumSamples, float *In, float *Out);
+void PowerSpectrum(int NumSamples, const float *In, float *Out);
 
 /*
  * Computes an FFT when the input data is real but you still
@@ -66,19 +71,15 @@ void PowerSpectrum(int NumSamples, float *In, float *Out);
  */
 
 void RealFFT(int NumSamples,
-             float *RealIn, float *RealOut, float *ImagOut);
+             const float *RealIn, float *RealOut, float *ImagOut);
 
 /*
  * Computes an Inverse FFT when the input data is conjugate symmetric
  * so the output is purely real.  NumSamples must be a power of
  * two.
- * Requires: EXPERIMENTAL_USE_REALFFTF
  */
-#include "Experimental.h"
-#ifdef EXPERIMENTAL_USE_REALFFTF
 void InverseRealFFT(int NumSamples,
-             float *RealIn, float *ImagIn, float *RealOut);
-#endif
+		    const float *RealIn, const float *ImagIn, float *RealOut);
 
 /*
  * Computes a FFT of complex input and returns complex output.
@@ -88,21 +89,15 @@ void InverseRealFFT(int NumSamples,
 
 void FFT(int NumSamples,
          bool InverseTransform,
-         float *RealIn, float *ImagIn, float *RealOut, float *ImagOut);
+         const float *RealIn, const float *ImagIn, float *RealOut, float *ImagOut);
 
 /*
- * Applies a windowing function to the data in place
- *
- * 0: Rectangular (no window)
- * 1: Bartlett    (triangular)
- * 2: Hamming
- * 3: Hanning
- * 4: Blackman
- * 5: Blackman-Harris
- * 6: Welch
- * 7: Gaussian(a=2.5)
- * 8: Gaussian(a=3.5)
- * 9: Gaussian(a=4.5)
+ * Multiply values in data by values of the chosen function
+ * DO NOT REUSE!  Prefer NewWindowFunc instead
+ * This version was inconsistent whether the window functions were
+ * symmetrical about NumSamples / 2, or about (NumSamples - 1) / 2
+ * It remains for compatibility until we decide to upgrade all the old uses
+ * All functions have 0 in data[0] except Rectangular, Hamming and Gaussians
  */
 
 enum eWindowFunctions
@@ -121,6 +116,23 @@ enum eWindowFunctions
 };
 
 void WindowFunc(int whichFunction, int NumSamples, float *data);
+
+/*
+ * Multiply values in data by values of the chosen function
+ * All functions are symmetrical about NumSamples / 2 if extraSample is false,
+ * otherwise about (NumSamples - 1) / 2
+ * All functions have 0 in data[0] except Rectangular, Hamming and Gaussians
+ */
+void NewWindowFunc(int whichFunction, int NumSamples, bool extraSample, float *data);
+
+/*
+ * Multiply values in data by derivative of the chosen function, assuming
+ * sampling interval is unit
+ * All functions are symmetrical about NumSamples / 2 if extraSample is false,
+ * otherwise about (NumSamples - 1) / 2
+ * All functions have 0 in data[0] except Rectangular, Hamming and Gaussians
+ */
+void DerivativeOfWindowFunc(int whichFunction, int NumSamples, bool extraSample, float *data);
 
 /*
  * Returns the name of the windowing function (for UI display)

@@ -20,6 +20,7 @@
 
 #include <wx/mimetype.h>
 #include <wx/filename.h>
+#include <wx/uri.h>
 
 #include "LinkingHtmlWindow.h"
 #include "../HelpText.h"
@@ -27,32 +28,55 @@
 #include "ErrorDialog.h"
 #include "HelpSystem.h"
 
-BEGIN_EVENT_TABLE(BrowserFrame, wxFrame)
-   EVT_BUTTON(wxID_FORWARD,  BrowserFrame::OnForward)
-   EVT_BUTTON(wxID_BACKWARD, BrowserFrame::OnBackward)
-   EVT_BUTTON(wxID_CANCEL,   BrowserFrame::OnClose)
-   EVT_KEY_DOWN(BrowserFrame::OnKeyDown)
+BEGIN_EVENT_TABLE(BrowserDialog, wxDialogWrapper)
+   EVT_BUTTON(wxID_FORWARD,  BrowserDialog::OnForward)
+   EVT_BUTTON(wxID_BACKWARD, BrowserDialog::OnBackward)
+   EVT_BUTTON(wxID_CANCEL,   BrowserDialog::OnClose)
+   EVT_KEY_DOWN(BrowserDialog::OnKeyDown)
 END_EVENT_TABLE()
 
 
-void BrowserFrame::OnForward(wxCommandEvent & WXUNUSED(event))
+BrowserDialog::BrowserDialog(wxWindow *pParent, const wxString &title)
+   : wxDialogWrapper{ pParent, ID, title }
+{
+
+}
+
+void BrowserDialog::OnForward(wxCommandEvent & WXUNUSED(event))
 {
    mpHtml->HistoryForward();
    UpdateButtons();
 }
 
-void BrowserFrame::OnBackward(wxCommandEvent & WXUNUSED(event))
+void BrowserDialog::OnBackward(wxCommandEvent & WXUNUSED(event))
 {
    mpHtml->HistoryBack();
    UpdateButtons();
 }
 
-void BrowserFrame::OnClose(wxCommandEvent & WXUNUSED(event))
+void BrowserDialog::OnClose(wxCommandEvent & WXUNUSED(event))
 {
-   Close();
+   if (IsModal() && !mDismissed)
+   {
+      mDismissed = true;
+      EndModal(wxID_CANCEL);
+   }
+   auto parent = GetParent();
+
+#ifdef __WXMAC__
+   auto grandparent = GetParent()->GetParent();
+#endif
+
+   parent->Destroy();
+
+#ifdef __WXMAC__
+   if(grandparent && grandparent->IsShown()) {
+      grandparent->Raise();
+   }
+#endif
 }
 
-void BrowserFrame::OnKeyDown(wxKeyEvent & event)
+void BrowserDialog::OnKeyDown(wxKeyEvent & event)
 {
    bool bSkip = true;
    if (event.GetKeyCode() == WXK_ESCAPE)
@@ -64,7 +88,7 @@ void BrowserFrame::OnKeyDown(wxKeyEvent & event)
 }
 
 
-void BrowserFrame::UpdateButtons()
+void BrowserDialog::UpdateButtons()
 {
    wxWindow * pWnd;
    if( (pWnd = FindWindowById( wxID_BACKWARD, this )) != NULL )
@@ -79,7 +103,8 @@ void BrowserFrame::UpdateButtons()
 
 void OpenInDefaultBrowser(const wxHtmlLinkInfo& link)
 {
-   wxLaunchDefaultBrowser(link.GetHref());
+   wxURI uri(link.GetHref());
+   wxLaunchDefaultBrowser(uri.BuildURI());
 }
 
 LinkingHtmlWindow::LinkingHtmlWindow(wxWindow *parent, wxWindowID id /*= -1*/,
@@ -99,7 +124,7 @@ void LinkingHtmlWindow::OnLinkClicked(const wxHtmlLinkInfo& link)
          wxFileName( FileNames::HtmlHelpDir(), href.Mid( 10 ) + wxT(".htm") ).GetFullPath();
       if( wxFileExists( FileName ) )
       {
-         HelpSystem::ShowHelpDialog(NULL, FileName, wxT(""));
+         HelpSystem::ShowHelpDialog(this, FileName, wxT(""));
          return;
       }
       else
@@ -113,7 +138,7 @@ void LinkingHtmlWindow::OnLinkClicked(const wxHtmlLinkInfo& link)
       OpenInDefaultBrowser( link );
       return;
    }
-   else if( !href.StartsWith( wxT("http:")))
+   else if( !href.StartsWith( wxT("http:"))  && !href.StartsWith( wxT("https:")) )
    {
       HtmlWindow::OnLinkClicked( link );
    }
@@ -122,7 +147,8 @@ void LinkingHtmlWindow::OnLinkClicked(const wxHtmlLinkInfo& link)
       OpenInDefaultBrowser(link);
       return;
    }
-   BrowserFrame * pDlg = wxDynamicCast( GetRelatedFrame(), BrowserFrame );
+   BrowserDialog * pDlg = wxDynamicCast(
+      GetRelatedFrame()->FindWindow(BrowserDialog::ID), BrowserDialog );
    if( pDlg )
    {
       pDlg->UpdateButtons();

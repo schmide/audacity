@@ -12,14 +12,15 @@
 #define __AUDACITY_TimeDialog__
 
 #include <wx/defs.h>
-#include <wx/dialog.h>
 #include <wx/event.h>
 #include <wx/string.h>
+
+#include "widgets/wxPanelWrapper.h"
 
 class NumericTextCtrl;
 class ShuttleGui;
 
-class TimeDialog:public wxDialog
+class TimeDialog final : public wxDialogWrapper
 {
  public:
 
@@ -30,7 +31,7 @@ class TimeDialog:public wxDialog
               double time,
               const wxString &prompt = _("Duration"));
 
-   void SetFormatString(wxString formatString);
+   void SetFormatString(const wxString &formatString);
    void SetSampleRate(double sampleRate);
    void SetTimeValue(double newTime);
    const double GetTimeValue();

@@ -11,6 +11,8 @@
 #ifndef __AUDACITY_EXPANDING_TOOL_BAR__
 #define __AUDACITY_EXPANDING_TOOL_BAR__
 
+#include "../MemoryX.h"
+#include <vector>
 #include <wx/defs.h>
 #include <wx/dialog.h>
 #include <wx/dynarray.h>
@@ -20,6 +22,7 @@
 #include <wx/minifram.h>
 
 #include "ImageRoll.h"
+#include "wxPanelWrapper.h"
 
 class wxDragImage;
 
@@ -37,13 +40,15 @@ WX_DECLARE_VOIDPTR_HASH_MAP(int, WindowHash);
 WX_DEFINE_ARRAY(ExpandingToolBar *, ExpandingToolBarArray);
 WX_DECLARE_OBJARRAY(wxRect, wxArrayRect);
 
+class ExpandingToolBarEvtHandler;
+
 //
 // A smart ToolBar class that has a "MainPanel" which is always
 // displayed, and an "ExtraPanel" that can be hidden to save space.
 // Can be docked into a ToolBarArea or floated in an ToolBarFrame;
 //
 
-class ExpandingToolBar : public wxPanel
+class ExpandingToolBar final : public wxPanelWrapper
 {
  public:
    DECLARE_DYNAMIC_CLASS(ExpandingToolBar)
@@ -73,8 +78,8 @@ class ExpandingToolBar : public wxPanel
    void UpdateMoving();
    void FinishMoving();
 
-   virtual bool Layout();
-   virtual void Fit();
+   bool Layout() override;
+   void Fit() override;
 
  protected:
    void RecursivelyPushEventHandlers(wxWindow *win);
@@ -107,9 +112,9 @@ class ExpandingToolBar : public wxPanel
    ToolBarFrame *mFrameParent;
    ToolBarDialog *mDialogParent;
    ToolBarArea *mAreaParent;
-   ToolBarArrangement *mSavedArrangement;
+   std::unique_ptr<ToolBarArrangement> mSavedArrangement;
    ImageRollPanel *mTargetPanel;
-   wxDragImage *mDragImage;
+   std::unique_ptr<wxDragImage> mDragImage;
    wxWindow *mTopLevelParent;
    wxArrayRect mDropTargets;
    wxRect mDropTarget;
@@ -119,9 +124,10 @@ class ExpandingToolBar : public wxPanel
    DECLARE_EVENT_TABLE();
 
    friend class ExpandingToolBarEvtHandler;
+   std::vector< movable_ptr< ExpandingToolBarEvtHandler > > mHandlers;
 };
 
-class ToolBarGrabber : public wxPanel
+class ToolBarGrabber final : public wxPanelWrapper
 {
  public:
    DECLARE_DYNAMIC_CLASS(ToolBarGrabber);
@@ -144,7 +150,7 @@ class ToolBarGrabber : public wxPanel
    DECLARE_EVENT_TABLE();
 };
 
-class ToolBarDialog : public wxDialog
+class ToolBarDialog final : public wxDialogWrapper
 {
  public:
    DECLARE_DYNAMIC_CLASS(ToolBarDialog)
@@ -156,7 +162,7 @@ class ToolBarDialog : public wxDialog
 
    ~ToolBarDialog();
 
-   virtual void Fit();
+   void Fit() override;
 
    void SetChild(ExpandingToolBar *child);
 
@@ -166,7 +172,7 @@ class ToolBarDialog : public wxDialog
    DECLARE_EVENT_TABLE()
 };
 
-class ToolBarFrame : public wxMiniFrame
+class ToolBarFrame final : public wxMiniFrame
 {
  public:
    DECLARE_DYNAMIC_CLASS(ToolBarFrame)
@@ -178,7 +184,7 @@ class ToolBarFrame : public wxMiniFrame
 
    ~ToolBarFrame();
 
-   virtual void Fit();
+   void Fit() override;
 
    void SetChild(ExpandingToolBar *child);
 
@@ -193,7 +199,7 @@ class ToolBarFrame : public wxMiniFrame
 // ToolBarArea sets the height dynamically based on the number of
 // toolbars it contains.
 //
-class ToolBarArea : public wxPanel
+class ToolBarArea final : public wxPanelWrapper
 {
  public:
    DECLARE_DYNAMIC_CLASS(ToolBarArea)
@@ -204,20 +210,20 @@ class ToolBarArea : public wxPanel
                const wxSize& size = wxDefaultSize);
    ~ToolBarArea();
 
-   virtual bool Layout();
-   virtual void Fit();
+   bool Layout() override;
+   void Fit() override;
 
-   virtual void OnSize(wxSizeEvent &evt);
-   virtual void OnMouse(wxMouseEvent &evt);
+   void OnSize(wxSizeEvent &evt);
+   void OnMouse(wxMouseEvent &evt);
 
    void CollapseAll(bool now = false);
 
-   // Does not add or delete the window, just relates to layout...
+   // Does not add or DELETE the window, just relates to layout...
    void AddChild(ExpandingToolBar *child);
    void RemoveChild(ExpandingToolBar *child);
 
-   ToolBarArrangement *SaveArrangement();
-   void RestoreArrangement(ToolBarArrangement *arrangement);
+   std::unique_ptr<ToolBarArrangement> SaveArrangement();
+   void RestoreArrangement(std::unique_ptr<ToolBarArrangement>&& arrangement);
 
    wxArrayRect GetDropTargets();
    void MoveChild(ExpandingToolBar *child, wxRect dropTarget);

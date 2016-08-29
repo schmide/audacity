@@ -12,6 +12,10 @@
 #ifndef __AUDACITY_KEY_CONFIG_PREFS__
 #define __AUDACITY_KEY_CONFIG_PREFS__
 
+#include "../Experimental.h"
+
+class ShuttleGui;
+
 #if defined(EXPERIMENTAL_KEY_VIEW)
 
 #include <wx/defs.h>
@@ -23,19 +27,20 @@
 #include <wx/textctrl.h>
 #include <wx/timer.h>
 
-#include "../ShuttleGui.h"
 #include "../commands/CommandManager.h"
 #include "../widgets/KeyView.h"
 
 #include "PrefsPanel.h"
 
-class KeyConfigPrefs:public PrefsPanel
+class wxStaticText;
+
+class KeyConfigPrefs final : public PrefsPanel
 {
 public:
    KeyConfigPrefs(wxWindow * parent);
    ~KeyConfigPrefs();
-   virtual bool Apply();
-   virtual void Cancel();
+   bool Apply() override;
+   void Cancel() override;
 
 private:
    void Populate();
@@ -93,18 +98,17 @@ private:
 #include <wx/textctrl.h>
 #include <wx/string.h>
 
-#include "../ShuttleGui.h"
 #include "../commands/CommandManager.h"
 
 #include "PrefsPanel.h"
 
-class KeyConfigPrefs:public PrefsPanel
+class KeyConfigPrefs final : public PrefsPanel
 {
  public:
    KeyConfigPrefs(wxWindow * parent);
    ~KeyConfigPrefs();
-   virtual bool Apply();
-   virtual void Cancel();
+   bool Apply() override;
+   void Cancel() override;
 
  private:
    void Populate();
@@ -141,6 +145,12 @@ class KeyConfigPrefs:public PrefsPanel
 
    DECLARE_EVENT_TABLE();
 };
+
 #endif
 
+class KeyConfigPrefsFactory final : public PrefsPanelFactory
+{
+public:
+   PrefsPanel *Create(wxWindow *parent) override;
+};
 #endif

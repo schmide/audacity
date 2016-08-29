@@ -11,7 +11,7 @@
 \class ModulePrefs
 \brief A PrefsPanel to enable/disable certain modules.  'Modules' are 
 dynamically linked libraries that modify Audacity.  They are plug-ins 
-with names like mnod-script-pipe that add new features.
+with names like mnod-script-pipe that add NEW features.
 
 *//*******************************************************************/
 
@@ -27,7 +27,7 @@ with names like mnod-script-pipe that add new features.
 
 ////////////////////////////////////////////////////////////////////////////////
 
-/* i18n-hint: Modules are optional extensions to Audacity that add new features.*/
+/* i18n-hint: Modules are optional extensions to Audacity that add NEW features.*/
 ModulePrefs::ModulePrefs(wxWindow * parent)
 :  PrefsPanel(parent, _("Modules"))
 {
@@ -53,6 +53,7 @@ void ModulePrefs::GetAllModuleStatuses(){
    // The old modules might be still around, and we do not want to use them.
    mModules.Clear();
    mStatuses.Clear();
+   mPaths.Clear();
 
 
    // Iterate through all Modules listed in prefs.
@@ -62,13 +63,18 @@ void ModulePrefs::GetAllModuleStatuses(){
    while ( bCont ) {
       int iStatus;
       gPrefs->Read( str, &iStatus, kModuleDisabled );
-      if( iStatus > kModuleNew ){
-         iStatus = kModuleNew;
-         gPrefs->Write( str, iStatus );
+      wxString fname;
+      gPrefs->Read( wxString( wxT("/ModulePath/") ) + str, &fname, wxEmptyString );
+      if( fname != wxEmptyString && wxFileExists( fname ) ){
+         if( iStatus > kModuleNew ){
+            iStatus = kModuleNew;
+            gPrefs->Write( str, iStatus );
+         }
+         //wxLogDebug( wxT("Entry: %s Value: %i"), str.c_str(), iStatus );
+         mModules.Add( str );
+         mStatuses.Add( iStatus );
+         mPaths.Add( fname );
       }
-      //wxLogDebug( wxT("Entry: %s Value: %i"), str.c_str(), iStatus );
-      mModules.Add( str );
-      mStatuses.Add( iStatus );
       bCont = gPrefs->GetNextEntry(str, dummy);
    }
    gPrefs->SetPath( wxT("") );
@@ -125,15 +131,15 @@ bool ModulePrefs::Apply()
    ShuttleGui S(this, eIsSavingToPrefs);
    PopulateOrExchange(S);
    int i;
-   for(i=0;i<(int)mModules.GetCount();i++)
-      SetModuleStatus( mModules[i], mStatuses[i] );
+   for(i=0;i<(int)mPaths.GetCount();i++)
+      SetModuleStatus( mPaths[i], mStatuses[i] );
    return true;
 }
 
 
 // static function that tells us about a module.
-int ModulePrefs::GetModuleStatus( wxString fname ){
-   // Default status is new module, and we will ask once.
+int ModulePrefs::GetModuleStatus(const wxString &fname){
+   // Default status is NEW module, and we will ask once.
    int iStatus = kModuleNew;
 
    wxString ShortName = wxFileName( fname ).GetName();
@@ -146,12 +152,17 @@ int ModulePrefs::GetModuleStatus( wxString fname ){
    return iStatus;
 }
 
-void ModulePrefs::SetModuleStatus( wxString fname, int iStatus ){
+void ModulePrefs::SetModuleStatus(const wxString &fname, int iStatus){
    wxString ShortName = wxFileName( fname ).GetName();
    wxString PrefName = wxString( wxT("/Module/") ) + ShortName.Lower();
    gPrefs->Write( PrefName, iStatus );
+   PrefName = wxString( wxT("/ModulePath/") ) + ShortName.Lower();
+   gPrefs->Write( PrefName, fname );
    gPrefs->Flush();
 }
 
-
-
+PrefsPanel *ModulePrefsFactory::Create(wxWindow *parent)
+{
+   wxASSERT(parent); // to justify safenew
+   return safenew ModulePrefs(parent);
+}

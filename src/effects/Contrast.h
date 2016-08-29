@@ -9,19 +9,16 @@
 #ifndef __AUDACITY_CONTRAST_DIALOG__
 #define __AUDACITY_CONTRAST_DIALOG__
 
-#include <wx/dialog.h>
-#include <wx/slider.h>
+#include "../widgets/wxPanelWrapper.h"
 
 class wxButton;
 class wxSizer;
 class wxString;
+class wxTextCtrl;
 
 class Envelope;
 class NumericTextCtrl;
 class WaveTrack;
-
-void InitContrastDialog(wxWindow * parent);
-void CloseContrastDialog();
 
 //----------------------------------------------------------------------------
 // ContrastDialog
@@ -29,16 +26,13 @@ void CloseContrastDialog();
 
 // Declare window functions
 
-class ContrastDialog:public wxDialog
+class ContrastDialog final : public wxDialogWrapper
 {
 public:
    // constructors and destructors
    ContrastDialog(wxWindow * parent, wxWindowID id,
               const wxString & title, const wxPoint & pos);
    ~ContrastDialog();
-
-   void OnGetForegroundDB( wxCommandEvent &event );
-   void OnGetBackgroundDB( wxCommandEvent &event );
 
    wxButton * m_pButton_UseCurrentF;
    wxButton * m_pButton_UseCurrentB;
@@ -52,8 +46,6 @@ public:
    NumericTextCtrl *mBackgroundStartT;
    NumericTextCtrl *mBackgroundEndT;
 
-   bool bFGset;
-   bool bBGset;
    double mT0;
    double mT1;
    double mProjectRate;
@@ -66,10 +58,8 @@ private:
    // handlers
    void OnGetURL(wxCommandEvent &event);
    void OnExport(wxCommandEvent &event);
-   void OnForegroundStartT(wxCommandEvent & event);
-   void OnForegroundEndT(wxCommandEvent & event);
-   void OnUseSelectionF(wxCommandEvent & event);
-   void OnUseSelectionB(wxCommandEvent & event);
+   void OnGetForeground(wxCommandEvent & event);
+   void OnGetBackground(wxCommandEvent & event);
    void results();
    void OnReset(wxCommandEvent & event);
    void OnClose(wxCommandEvent & event);
@@ -82,15 +72,14 @@ private:
 
    float foregrounddB;
    float backgrounddB;
+   bool  mForegroundIsDefined;
+   bool  mBackgroundIsDefined;
    double mT0orig;
    double mT1orig;
 
    bool mDoBackground;
-   float GetDB();
-   double GetStartTime();
-   void SetStartTime(double);
-   double GetEndTime();
-   void SetEndTime(double);
+   bool GetDB(float & dB);
+   void SetStartAndEndTime();
 
    double length;
 

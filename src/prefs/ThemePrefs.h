@@ -17,16 +17,16 @@
 #include <wx/defs.h>
 #include <wx/window.h>
 
-#include "../ShuttleGui.h"
-
 #include "PrefsPanel.h"
 
-class ThemePrefs:public PrefsPanel
+class ShuttleGui;
+
+class ThemePrefs final : public PrefsPanel
 {
  public:
    ThemePrefs(wxWindow * parent);
    ~ThemePrefs(void);
-   virtual bool Apply();
+   bool Apply() override;
 
  private:
    void Populate();
@@ -41,4 +41,9 @@ class ThemePrefs:public PrefsPanel
    DECLARE_EVENT_TABLE();
 };
 
+class ThemePrefsFactory final : public PrefsPanelFactory
+{
+public:
+   PrefsPanel *Create(wxWindow *parent) override;
+};
 #endif

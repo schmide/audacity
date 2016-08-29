@@ -18,16 +18,21 @@
 #include <wx/arrstr.h>
 #include <wx/window.h>
 
-#include "../ShuttleGui.h"
-
 #include "PrefsPanel.h"
 
-class TracksPrefs:public PrefsPanel
+class ShuttleGui;
+
+class TracksPrefs final : public PrefsPanel
 {
  public:
    TracksPrefs(wxWindow * parent);
    ~TracksPrefs();
-   virtual bool Apply();
+   bool Apply() override;
+
+   static bool GetPinnedHeadPreference();
+   static void SetPinnedHeadPreference(bool value, bool flush = false);
+   static const wxChar *ScrollingPreferenceKey();
+   static inline bool ScrollingPreferenceDefault() { return false; }
 
  private:
    void Populate();
@@ -39,4 +44,9 @@ class TracksPrefs:public PrefsPanel
    wxArrayString mViewChoices;
 };
 
+class TracksPrefsFactory final : public PrefsPanelFactory
+{
+public:
+   PrefsPanel *Create(wxWindow *parent) override;
+};
 #endif

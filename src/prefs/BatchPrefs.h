@@ -16,16 +16,16 @@
 
 #include <wx/window.h>
 
-#include "../ShuttleGui.h"
-
 #include "PrefsPanel.h"
 
-class BatchPrefs : public PrefsPanel
+class ShuttleGui;
+
+class BatchPrefs final : public PrefsPanel
 {
 public:
    BatchPrefs(wxWindow * parent);
    ~BatchPrefs();
-   virtual bool Apply();
+   bool Apply() override;
 
 private:
    void Populate();
@@ -34,4 +34,9 @@ private:
    DECLARE_EVENT_TABLE();
 };
 
+class BatchPrefsFactory final : public PrefsPanelFactory
+{
+public:
+   PrefsPanel *Create(wxWindow *parent) override;
+};
 #endif

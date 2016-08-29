@@ -9,6 +9,7 @@
 *******************************************************************/
 
 #include "Screenshot.h"
+#include "MemoryX.h"
 #include "commands/ScreenshotCommand.h"
 #include "commands/CommandTargets.h"
 #include "commands/CommandDirectory.h"
@@ -34,18 +35,20 @@
 #include "Prefs.h"
 #include "toolbars/ToolManager.h"
 
+#include "Track.h"
+
 class CommandType;
 
 ////////////////////////////////////////////////////////////////////////////////
 
-class ScreenFrame:public wxFrame
+class ScreenFrame final : public wxFrame
 {
  public:
    // constructors and destructors
    ScreenFrame(wxWindow *parent, wxWindowID id);
    virtual ~ScreenFrame();
 
-   virtual bool ProcessEvent(wxEvent & event);
+   bool ProcessEvent(wxEvent & event) override;
 
  private:
    void Populate();
@@ -94,7 +97,7 @@ class ScreenFrame:public wxFrame
    void OnCaptureFirstTrack(wxCommandEvent & event);
    void OnCaptureSecondTrack(wxCommandEvent & event);
 
-   ScreenshotCommand *CreateCommand();
+   std::unique_ptr<ScreenshotCommand> CreateCommand();
 
    wxCheckBox *mDelayCheckBox;
    wxTextCtrl *mDirectoryTextBox;
@@ -102,20 +105,21 @@ class ScreenFrame:public wxFrame
    wxToggleButton *mWhite;
    wxStatusBar *mStatus;
 
-   ScreenshotCommand *mCommand;
+   std::unique_ptr<ScreenshotCommand> mCommand;
    CommandExecutionContext mContext;
 
    DECLARE_EVENT_TABLE()
 };
 
-static ScreenFrame *mFrame = NULL;
+using ScreenFramePtr = Destroy_ptr<ScreenFrame>;
+ScreenFramePtr mFrame;
 
 ////////////////////////////////////////////////////////////////////////////////
 
 void OpenScreenshotTools()
 {
    if (!mFrame) {
-      mFrame = new ScreenFrame(NULL, -1);
+      mFrame = ScreenFramePtr{ safenew ScreenFrame(NULL, -1) };
    }
    mFrame->Show();
    mFrame->Raise();
@@ -123,35 +127,32 @@ void OpenScreenshotTools()
 
 void CloseScreenshotTools()
 {
-   if (mFrame) {
-      mFrame->Destroy();
-      mFrame = NULL;
-   }
+   mFrame.reset();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 
-class ScreenFrameTimer:public wxTimer
+class ScreenFrameTimer final : public wxTimer
 {
  public:
    ScreenFrameTimer(ScreenFrame *frame,
                     wxEvent & event)
    {
       screenFrame = frame;
-      evt = event.Clone();
+      evt.reset(event.Clone());
    }
 
-   virtual void Notify()
+   void Notify() override
    {
+      // Process timer notification just once, then destroy self
       evt->SetEventObject(NULL);
       screenFrame->ProcessEvent(*evt);
-      delete evt;
       delete this;
    }
 
  private:
    ScreenFrame *screenFrame;
-   wxEvent *evt;
+   std::unique_ptr<wxEvent> evt;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -250,26 +251,34 @@ BEGIN_EVENT_TABLE(ScreenFrame, wxFrame)
 END_EVENT_TABLE();
 
 // Must not be called before CreateStatusBar!
-ScreenshotCommand *ScreenFrame::CreateCommand()
+std::unique_ptr<ScreenshotCommand> ScreenFrame::CreateCommand()
 {
    wxASSERT(mStatus != NULL);
-   CommandOutputTarget *output =
-      new CommandOutputTarget(new NullProgressTarget(),
-                              new StatusBarTarget(*mStatus),
-                              new MessageBoxTarget());
+   auto output =
+      std::make_unique<CommandOutputTarget>(std::make_unique<NullProgressTarget>(),
+                              std::make_shared<StatusBarTarget>(*mStatus),
+                              std::make_shared<MessageBoxTarget>());
    CommandType *type = CommandDirectory::Get()->LookUp(wxT("Screenshot"));
    wxASSERT_MSG(type != NULL, wxT("Screenshot command doesn't exist!"));
-   return new ScreenshotCommand(*type, output, this);
+   return std::make_unique<ScreenshotCommand>(*type, std::move(output), this);
 }
 
 ScreenFrame::ScreenFrame(wxWindow * parent, wxWindowID id)
 :  wxFrame(parent, id, _("Screen Capture Frame"),
            wxDefaultPosition, wxDefaultSize,
+
 #if !defined(__WXMSW__)
-           wxFRAME_TOOL_WINDOW|
+
+   #if !defined(__WXMAC__) // bug1358
+           wxFRAME_TOOL_WINDOW |
+   #endif
+
 #else
+
            wxSTAY_ON_TOP|
+
 #endif
+
            wxSYSTEM_MENU|wxCAPTION|wxCLOSE_BOX),
    mContext(&wxGetApp(), GetActiveProject())
 {
@@ -285,12 +294,11 @@ ScreenFrame::ScreenFrame(wxWindow * parent, wxWindowID id)
    // Note that the audio could be playing.
    // The monitoring will switch off temporarily
    // because we've switched monitor mid play.
-   mContext.proj->mToolManager->Reset();
+   mContext.GetProject()->GetToolManager()->Reset();
 }
 
 ScreenFrame::~ScreenFrame()
 {
-   delete mCommand;
 }
 
 void ScreenFrame::Populate()
@@ -331,13 +339,14 @@ void ScreenFrame::PopulateOrExchange(ShuttleGui & S)
             S.Id(IdMainWindowLarge).AddButton(_("Resize Large"));
             /* i18n-hint: Bkgnd is short for background and appears on a small button
              * It is OK to just translate this item as if it said 'Blue' */
-            mBlue = new wxToggleButton(p,
+            wxASSERT(p); // To justify safenew
+            mBlue = safenew wxToggleButton(p,
                                        IdToggleBackgroundBlue,
                                        _("Blue Bkgnd"));
             S.AddWindow(mBlue);
             /* i18n-hint: Bkgnd is short for background and appears on a small button
              * It is OK to just translate this item as if it said 'White' */
-            mWhite = new wxToggleButton(p,
+            mWhite = safenew wxToggleButton(p,
                                         IdToggleBackgroundWhite,
                                         _("White Bkgnd"));
             S.AddWindow(mWhite);
@@ -426,7 +435,7 @@ void ScreenFrame::PopulateOrExchange(ShuttleGui & S)
    S.EndPanel();
 
    Layout();
-   Fit();
+   GetSizer()->Fit(this);
    SetMinSize(GetSize());
 
    int top = 0;
@@ -447,7 +456,7 @@ void ScreenFrame::PopulateOrExchange(ShuttleGui & S)
       CentreOnParent();
    }
 
-   SetIcon(mContext.proj->GetIcon());
+   SetIcon(mContext.GetProject()->GetIcon());
 }
 
 bool ScreenFrame::ProcessEvent(wxEvent & e)
@@ -460,7 +469,8 @@ bool ScreenFrame::ProcessEvent(wxEvent & e)
        e.GetEventType() == wxEVT_COMMAND_BUTTON_CLICKED &&
        id >= IdAllDelayedEvents && id <= IdLastDelayedEvent &&
        e.GetEventObject() != NULL) {
-      ScreenFrameTimer *timer = new ScreenFrameTimer(this, e);
+      // safenew because it's a one-shot that deletes itself
+      ScreenFrameTimer *timer = safenew ScreenFrameTimer(this, e);
       timer->Start(5000, true);
       return true;
    }
@@ -473,7 +483,8 @@ bool ScreenFrame::ProcessEvent(wxEvent & e)
 
 void ScreenFrame::OnCloseWindow(wxCloseEvent &  WXUNUSED(event))
 {
-   mFrame = NULL;
+   if (this == mFrame.get())
+      mFrame.release();
    Destroy();
 }
 
@@ -541,9 +552,9 @@ void ScreenFrame::SizeMainWindow(int w, int h)
 {
    int top = 20;
 
-   mContext.proj->Maximize(false);
-   mContext.proj->SetSize(16, 16 + top, w, h);
-   mContext.proj->mToolManager->Reset();
+   mContext.GetProject()->Maximize(false);
+   mContext.GetProject()->SetSize(16, 16 + top, w, h);
+   mContext.GetProject()->GetToolManager()->Reset();
 }
 
 void ScreenFrame::OnMainWindowSmall(wxCommandEvent & WXUNUSED(event))
@@ -563,7 +574,7 @@ void ScreenFrame::DoCapture(wxString captureMode)
 
    mCommand->SetParameter(wxT("CaptureMode"), captureMode);
    if (!mCommand->Apply(mContext))
-      mStatus->SetStatusText(wxT("Capture failed!"));
+      mStatus->SetStatusText(wxT("Capture failed!"), mainStatusBarField);
    Show();
 }
 
@@ -660,9 +671,9 @@ void ScreenFrame::OnCaptureSecondTrack(wxCommandEvent & WXUNUSED(event))
 void ScreenFrame::TimeZoom(double seconds)
 {
    int width, height;
-   mContext.proj->GetClientSize(&width, &height);
-   mContext.proj->mViewInfo.zoom = (0.75 * width) / seconds;
-   mContext.proj->RedrawProject();
+   mContext.GetProject()->GetClientSize(&width, &height);
+   mContext.GetProject()->mViewInfo.SetZoom((0.75 * width) / seconds);
+   mContext.GetProject()->RedrawProject();
 }
 
 void ScreenFrame::OnOneSec(wxCommandEvent & WXUNUSED(event))
@@ -692,7 +703,7 @@ void ScreenFrame::OnOneHour(wxCommandEvent & WXUNUSED(event))
 
 void ScreenFrame::SizeTracks(int h)
 {
-   TrackListIterator iter(mContext.proj->GetTracks());
+   TrackListIterator iter(mContext.GetProject()->GetTracks());
    for (Track * t = iter.First(); t; t = iter.Next()) {
       if (t->GetKind() == Track::Wave) {
          if (t->GetLink()) {
@@ -703,18 +714,18 @@ void ScreenFrame::SizeTracks(int h)
          }
       }
    }
-   mContext.proj->RedrawProject();
+   mContext.GetProject()->RedrawProject();
 }
 
 void ScreenFrame::OnShortTracks(wxCommandEvent & WXUNUSED(event))
 {
-   TrackListIterator iter(mContext.proj->GetTracks());
+   TrackListIterator iter(mContext.GetProject()->GetTracks());
    for (Track * t = iter.First(); t; t = iter.Next()) {
       if (t->GetKind() == Track::Wave) {
          t->SetHeight(t->GetMinimizedHeight());
       }
    }
-   mContext.proj->RedrawProject();
+   mContext.GetProject()->RedrawProject();
 }
 
 void ScreenFrame::OnMedTracks(wxCommandEvent & WXUNUSED(event))

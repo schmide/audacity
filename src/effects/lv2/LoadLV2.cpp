@@ -56,7 +56,8 @@ Functions that find and load all LV2 plugins on the system.
 DECLARE_MODULE_ENTRY(AudacityModule)
 {
    // Create and register the importer
-   return new LV2EffectsModule(moduleManager, path);
+   // Trust the module manager not to leak this
+   return safenew LV2EffectsModule(moduleManager, path);
 }
 
 // ============================================================================
@@ -98,17 +99,17 @@ wxString LV2EffectsModule::GetPath()
 
 wxString LV2EffectsModule::GetSymbol()
 {
-   return wxT("LV2 Effects Module");
+   return XO("LV2 Effects");
 }
 
 wxString LV2EffectsModule::GetName()
 {
-   return _("LV2 Effects Module");
+   return GetSymbol();
 }
 
 wxString LV2EffectsModule::GetVendor()
 {
-   return _("The Audacity Team");
+   return XO("The Audacity Team");
 }
 
 wxString LV2EffectsModule::GetVersion()
@@ -119,7 +120,7 @@ wxString LV2EffectsModule::GetVersion()
 
 wxString LV2EffectsModule::GetDescription()
 {
-   return _("Provides LV2 Effects support to Audacity");
+   return XO("Provides LV2 Effects support to Audacity");
 }
 
 // ============================================================================
@@ -227,7 +228,16 @@ wxArrayString LV2EffectsModule::FindPlugins(PluginManagerInterface & WXUNUSED(pm
    wxArrayString plugins;
    LILV_FOREACH(plugins, i, plugs)
    {
-      plugins.Add(LilvString(lilv_plugin_get_uri(lilv_plugins_get(plugs, i))));
+      const LilvPlugin *plug = lilv_plugins_get(plugs, i);
+
+      // Bypass Instrument (MIDI) plugins for now
+      const LilvPluginClass *cls = lilv_plugin_get_class(plug);
+      if (lilv_node_equals(lilv_plugin_class_get_uri(cls), LV2Effect::gInstrument))
+      {
+         continue;
+      }
+
+      plugins.Add(LilvString(lilv_plugin_get_uri(plug)));
    }
 
    return plugins;
@@ -257,22 +267,22 @@ bool LV2EffectsModule::IsPluginValid(const wxString & path)
 
 IdentInterface *LV2EffectsModule::CreateInstance(const wxString & path)
 {
+   // Acquires a resource for the application.
    const LilvPlugin *plug = GetPlugin(path);
    if (!plug)
    {
       return NULL;
    }
 
-   return new LV2Effect(plug);
+   // Safety of this depends on complementary calls to DeleteInstance on the module manager side.
+   return safenew LV2Effect(plug);
 }
 
 void LV2EffectsModule::DeleteInstance(IdentInterface *instance)
 {
-   LV2Effect *effect = dynamic_cast<LV2Effect *>(instance);
-   if (effect)
-   {
-      delete effect;
-   }
+   std::unique_ptr < LV2Effect > {
+      dynamic_cast<LV2Effect *>(instance)
+   };
 }
 
 // ============================================================================

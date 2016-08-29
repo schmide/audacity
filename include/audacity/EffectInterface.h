@@ -52,12 +52,13 @@
 typedef enum EffectType
 {
    EffectTypeNone,
+   EffectTypeHidden,
    EffectTypeGenerate,
    EffectTypeProcess,
    EffectTypeAnalyze
 } EffectType;
 
-class AUDACITY_DLL_API EffectIdentInterface : public IdentInterface
+class AUDACITY_DLL_API EffectIdentInterface  /* not final */ : public IdentInterface
 {
 public:
    virtual ~EffectIdentInterface() {};
@@ -87,13 +88,14 @@ public:
 class EffectUIHostInterface;
 class EffectUIClientInterface;
 
-class AUDACITY_DLL_API EffectHostInterface : public ConfigClientInterface
+class AUDACITY_DLL_API EffectHostInterface  /* not final */ : public ConfigClientInterface
 {
 public:
    virtual ~EffectHostInterface() {};
 
    virtual double GetDefaultDuration() = 0;
-   virtual double GetDuration(bool *isSelection = NULL) = 0;
+   virtual double GetDuration() = 0;
+   virtual wxString GetDurationFormat() = 0;
    virtual void SetDuration(double seconds) = 0;
 
    virtual bool Apply() = 0;
@@ -108,7 +110,7 @@ public:
    virtual wxString GetFactoryDefaultsGroup() = 0;
 };
 
-class AUDACITY_DLL_API EffectClientInterface : public EffectIdentInterface
+class AUDACITY_DLL_API EffectClientInterface  /* not final */ : public EffectIdentInterface
 {
 public:
    virtual ~EffectClientInterface() {};
@@ -121,7 +123,7 @@ public:
    virtual int GetMidiInCount() = 0;
    virtual int GetMidiOutCount() = 0;
 
-   virtual void SetSampleRate(sampleCount rate) = 0;
+   virtual void SetSampleRate(double rate) = 0;
    virtual sampleCount SetBlockSize(sampleCount maxBlockSize) = 0;
 
    virtual sampleCount GetLatency() = 0;
@@ -160,7 +162,7 @@ public:
    virtual ~EffectUIHostInterface() {};
 };
 
-class AUDACITY_DLL_API EffectUIClientInterface
+class AUDACITY_DLL_API EffectUIClientInterface /* not final */
 {
 public:
    virtual ~EffectUIClientInterface() {};

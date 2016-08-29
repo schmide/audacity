@@ -26,31 +26,31 @@ wxString OpenProjectCommandType::BuildName()
 
 void OpenProjectCommandType::BuildSignature(CommandSignature &signature)
 {
-   BoolValidator *addToHistoryValidator(new BoolValidator());
-   signature.AddParameter(wxT("AddToHistory"), true, addToHistoryValidator);
-   Validator *filenameValidator(new Validator());
-   signature.AddParameter(wxT("Filename"), wxT(""), filenameValidator);
+   auto addToHistoryValidator = make_movable<BoolValidator>();
+   signature.AddParameter(wxT("AddToHistory"), true, std::move(addToHistoryValidator));
+   auto filenameValidator = make_movable<DefaultValidator>();
+   signature.AddParameter(wxT("Filename"), wxT(""), std::move(filenameValidator));
 }
 
-Command *OpenProjectCommandType::Create(CommandOutputTarget *target)
+CommandHolder OpenProjectCommandType::Create(std::unique_ptr<CommandOutputTarget> &&target)
 {
-   return new OpenProjectCommand(*this, target);
+   return std::make_shared<OpenProjectCommand>(*this, std::move(target));
 }
 
 bool OpenProjectCommand::Apply(CommandExecutionContext context)
 {
    wxString fileName = GetString(wxT("Filename"));
    bool addToHistory  = GetBool(wxT("AddToHistory"));
-   wxString oldFileName = context.proj->GetFileName();
+   wxString oldFileName = context.GetProject()->GetFileName();
    if(fileName == wxEmptyString)
    {
-      context.proj->OnOpen();
+      context.GetProject()->OnOpen();
    }
    else
    {
-      context.proj->OpenFile(fileName,addToHistory);
+      context.GetProject()->OpenFile(fileName, addToHistory);
    }
-   wxString newFileName = context.proj->GetFileName();
+   const wxString &newFileName = context.GetProject()->GetFileName();
 
    // Because Open does not return a success or failure, we have to guess
    // at this point, based on whether the project file name has
@@ -70,19 +70,19 @@ wxString SaveProjectCommandType::BuildName()
 
 void SaveProjectCommandType::BuildSignature(CommandSignature &signature)
 {
-   BoolValidator *saveCompressedValidator(new BoolValidator());
-   BoolValidator *addToHistoryValidator(new BoolValidator());
+   auto saveCompressedValidator = make_movable<BoolValidator>();
+   auto addToHistoryValidator = make_movable<BoolValidator>();
 
-   signature.AddParameter(wxT("Compress"), false, saveCompressedValidator);
-   signature.AddParameter(wxT("AddToHistory"), true, addToHistoryValidator);
+   signature.AddParameter(wxT("Compress"), false, std::move(saveCompressedValidator));
+   signature.AddParameter(wxT("AddToHistory"), true, std::move(addToHistoryValidator));
 
-   Validator *filenameValidator(new Validator());
-   signature.AddParameter(wxT("Filename"), wxT(""), filenameValidator);
+   auto filenameValidator = make_movable<DefaultValidator>();
+   signature.AddParameter(wxT("Filename"), wxT(""), std::move(filenameValidator));
 }
 
-Command *SaveProjectCommandType::Create(CommandOutputTarget *target)
+CommandHolder SaveProjectCommandType::Create(std::unique_ptr<CommandOutputTarget> &&target)
 {
-   return new SaveProjectCommand(*this, target);
+   return std::make_shared<SaveProjectCommand>(*this, std::move(target));
 }
 
 bool SaveProjectCommand::Apply(CommandExecutionContext context)
@@ -91,9 +91,9 @@ bool SaveProjectCommand::Apply(CommandExecutionContext context)
    bool saveCompressed  = GetBool(wxT("Compress"));
    bool addToHistory  = GetBool(wxT("AddToHistory"));
    if(fileName == wxEmptyString)
-      return context.proj->SaveAs(saveCompressed);
+      return context.GetProject()->SaveAs(saveCompressed);
    else
-      return context.proj->SaveAs(fileName,saveCompressed,addToHistory);
+      return context.GetProject()->SaveAs(fileName,saveCompressed,addToHistory);
 }
 
 SaveProjectCommand::~SaveProjectCommand()

@@ -11,18 +11,23 @@
 #ifndef __AUDACITY_RULER__
 #define __AUDACITY_RULER__
 
+#include "OverlayPanel.h"
+#include "../MemoryX.h"
+#include <wx/bitmap.h>
 #include <wx/dc.h>
+#include <wx/dcmemory.h>
 #include <wx/event.h>
 #include <wx/font.h>
-#include <wx/panel.h>
 #include <wx/window.h>
-#include "../Envelope.h"
 #include "../Experimental.h"
 
-struct ViewInfo;
+class ViewInfo;
 class AudacityProject;
 class TimeTrack;
 class SnapManager;
+class NumberScale;
+class TrackList;
+class ZoomInfo;
 
 class AUDACITY_DLL_API Ruler {
  public:
@@ -56,16 +61,26 @@ class AUDACITY_DLL_API Ruler {
    // (at the center of the pixel, in both cases)
    void SetRange(double min, double max);
 
+   // An overload needed for the special case of fisheye
+   // min is the value at (x, y)
+   // max is the value at (x+width, y+height)
+   // hiddenMin, hiddenMax are the values that would be shown without the fisheye.
+   // (at the center of the pixel, in both cases)
+   void SetRange(double min, double max, double hiddenMin, double hiddenMax);
+
    //
    // Optional Ruler Parameters
    //
+
+   // If twoTone is true, cause zero and positive numbers to appear black, negative in another color.
+   void SetTwoTone(bool twoTone);
 
    // IntFormat, RealFormat, or TimeFormat
    void SetFormat(RulerFormat format);
 
    // Specify the name of the units (like "dB") if you
    // want numbers like "1.6" formatted as "1.6 dB".
-   void SetUnits(wxString units);
+   void SetUnits(const wxString &units);
 
    // Logarithmic
    void SetLog(bool log);
@@ -87,6 +102,12 @@ class AUDACITY_DLL_API Ruler {
 
    // Good defaults are provided, but you can override here
    void SetFonts(const wxFont &minorFont, const wxFont &majorFont, const wxFont &minorMinorFont);
+   struct Fonts { wxFont *major, *minor, *minorMinor; };
+   Fonts GetFonts() const
+   { return { mMajorFont.get(), mMinorFont.get(), mMinorMinorFont.get() }; }
+
+   // Copies *pScale if it is not NULL
+   void SetNumberScale(const NumberScale *pScale);
 
    // The ruler will not draw text within this (pixel) range.
    // Use this if you have another graphic object obscuring part
@@ -111,13 +132,15 @@ class AUDACITY_DLL_API Ruler {
    void SetCustomMajorLabels(wxArrayString *label, int numLabel, int start, int step);
    void SetCustomMinorLabels(wxArrayString *label, int numLabel, int start, int step);
 
+   void SetUseZoomInfo(int leftOffset, const ZoomInfo *zoomInfo);
+
    //
    // Drawing
    //
 
    // Note that it will not erase for you...
    void Draw(wxDC& dc);
-   void Draw(wxDC& dc, TimeTrack* timetrack);
+   void Draw(wxDC& dc, const TimeTrack* timetrack);
    // If length <> 0, draws lines perpendiculars to ruler corresponding
    // to selected ticks (major, minor, or both), in an adjacent window.
    // You may need to use the offsets if you are using part of the dc for rulers, borders etc.
@@ -127,10 +150,12 @@ class AUDACITY_DLL_API Ruler {
    void SetTickColour( const wxColour & colour)
    { mTickColour = colour; mPen.SetColour( colour );}
 
- private:
+   // Force regeneration of labels at next draw time
    void Invalidate();
+
+ private:
    void Update();
-   void Update(TimeTrack* timetrack);
+   void Update(const TimeTrack* timetrack);
    void FindTickSizes();
    void FindLinearTickSizes(double UPP);
    wxString LabelString(double d, bool major);
@@ -146,7 +171,7 @@ public:
    wxRect mRect;
 
 private:
-   wxColour mTickColour;
+   static wxColour mTickColour;
    wxPen mPen;
 
    int          mMaxWidth, mMaxHeight;
@@ -155,11 +180,11 @@ private:
    int          mLengthOld;
    wxDC        *mDC;
 
-   wxFont      *mMinorFont, *mMajorFont;
-   wxFont      *mMinorMinorFont;
+   std::unique_ptr<wxFont> mMinorFont, mMajorFont, mMinorMinorFont;
    bool         mUserFonts;
 
    double       mMin, mMax;
+   double       mHiddenMin, mHiddenMax;
 
    double       mMajor;
    double       mMinor;
@@ -174,9 +199,12 @@ private:
 
    class Label {
     public:
+      double value;
       int pos;
       int lx, ly;
       wxString text;
+
+      void Draw(wxDC &dc, bool twoTone) const;
    };
 
    int          mNumMajor;
@@ -206,9 +234,14 @@ private:
    bool         mMinorGrid;      //         .
    int          mGridLineLength; //        end
    wxString     mUnits;
+   bool         mTwoTone;
+   const ZoomInfo *mUseZoomInfo;
+   int          mLeftOffset;
+
+   std::unique_ptr<NumberScale> mpNumberScale;
 };
 
-class AUDACITY_DLL_API RulerPanel : public wxPanel {
+class AUDACITY_DLL_API RulerPanel final : public wxPanelWrapper {
    DECLARE_DYNAMIC_CLASS(RulerPanel)
 
  public:
@@ -220,7 +253,7 @@ class AUDACITY_DLL_API RulerPanel : public wxPanel {
 
    void DoSetSize(int x, int y,
                   int width, int height,
-                  int sizeFlags = wxSIZE_AUTO);
+                  int sizeFlags = wxSIZE_AUTO) override;
 
    void OnErase(wxEraseEvent &evt);
    void OnPaint(wxPaintEvent &evt);
@@ -228,6 +261,8 @@ class AUDACITY_DLL_API RulerPanel : public wxPanel {
 
    // We don't need or want to accept focus.
    bool AcceptsFocus() const { return false; }
+   // So that wxPanel is not included in Tab traversal - see wxWidgets bug 15581
+   bool AcceptsFocusFromKeyboard() const { return false; }
 
  public:
 
@@ -237,15 +272,19 @@ private:
     DECLARE_EVENT_TABLE()
 };
 
+class QuickPlayIndicatorOverlay;
+class QuickPlayRulerOverlay;
+
 // This is an Audacity Specific ruler panel which additionally
 // has border, selection markers, play marker.
 // Once TrackPanel uses wxSizers, we will derive it from some
 // wxWindow and the GetSize and SetSize functions
 // will then be wxWidgets functions instead.
-class AUDACITY_DLL_API AdornedRulerPanel : public wxPanel
+class AUDACITY_DLL_API AdornedRulerPanel final : public OverlayPanel
 {
 public:
-   AdornedRulerPanel(wxWindow* parent,
+   AdornedRulerPanel(AudacityProject *project,
+                     wxWindow* parent,
                      wxWindowID id,
                      const wxPoint& pos = wxDefaultPosition,
                      const wxSize& size = wxDefaultSize,
@@ -253,66 +292,118 @@ public:
 
    ~AdornedRulerPanel();
 
-public:
-   static int GetRulerHeight() { return 28; }
-   void SetLeftOffset(int offset){ mLeftOffset = offset; }
+   bool AcceptsFocus() const override { return s_AcceptsFocus; }
+   bool AcceptsFocusFromKeyboard() const override { return true; }
+   void SetFocusFromKbd() override;
 
-   void DrawCursor(double pos);
-   void DrawIndicator(double pos, bool rec);
+public:
+   int GetRulerHeight() { return GetRulerHeight(mShowScrubbing); }
+   static int GetRulerHeight(bool showScrubBar);
+   wxRect GetInnerRect() const { return mInner; }
+
+   void SetLeftOffset(int offset);
+
    void DrawSelection();
-   void ClearIndicator();
 
    void SetPlayRegion(double playRegionStart, double playRegionEnd);
    void ClearPlayRegion();
    void GetPlayRegion(double* playRegionStart, double* playRegionEnd);
 
-   void SetProject(AudacityProject* project) {mProject = project;};
    void GetMaxSize(wxCoord *width, wxCoord *height);
 
-   void RegenerateTooltips();
+   void InvalidateRuler();
 
-   bool mIsSnapped;
+   void UpdatePrefs();
+   void ReCreateButtons();
+
+   enum class StatusChoice {
+      EnteringQP,
+      EnteringScrubZone,
+      Leaving,
+      NoChange
+   };
+
+   void RegenerateTooltips(StatusChoice choice);
+
+   void ShowQuickPlayIndicator( bool repaint_all=false);
+   void HideQuickPlayIndicator( bool repaint_all=false);
+   void UpdateQuickPlayPos(wxCoord &mousPosX);
+
+   bool ShowingScrubRuler() const { return mShowScrubbing; }
+   void OnToggleScrubRuler(/*wxCommandEvent& */);
+   void OnToggleScrubRulerFromMenu(wxCommandEvent& );
+   void SetPanelSize();
+
 
 private:
    void OnCapture(wxCommandEvent & evt);
-   void OnErase(wxEraseEvent &evt);
    void OnPaint(wxPaintEvent &evt);
    void OnSize(wxSizeEvent &evt);
+   void UpdateRects();
    void OnMouseEvents(wxMouseEvent &evt);
+   void HandleQPClick(wxMouseEvent &event, wxCoord mousePosX);
+   void HandleQPDrag(wxMouseEvent &event, wxCoord mousePosX);
+   void HandleQPRelease(wxMouseEvent &event);
+   void StartQPPlay(bool looped, bool cutPreview);
+
+   void UpdateStatusBarAndTooltips(StatusChoice choice);
+
    void OnCaptureLost(wxMouseCaptureLostEvent &evt);
 
-   void DoDrawBorder(wxDC * dc);
+   void DoDrawBackground(wxDC * dc);
+   void DoDrawEdge(wxDC *dc);
    void DoDrawMarks(wxDC * dc, bool /*text */ );
-   void DoDrawCursor(wxDC * dc);
    void DoDrawSelection(wxDC * dc);
-   void DoDrawIndicator(wxDC * dc);
-   void DrawQuickPlayIndicator(wxDC * dc, bool clear /*delete old only*/);
+
+public:
+   void DoDrawIndicator(wxDC * dc, wxCoord xx, bool playing, int width, bool scrub, bool seek);
+   void UpdateButtonStates();
+
+private:
+   static bool s_AcceptsFocus;
+   struct Resetter { void operator () (bool *p) const { if(p) *p = false; } };
+   using TempAllowFocus = std::unique_ptr<bool, Resetter>;
+
+public:
+   static TempAllowFocus TemporarilyAllowFocus();
+
+private:
+   QuickPlayIndicatorOverlay *GetOverlay();
+   void ShowOrHideQuickPlayIndicator(bool show, bool repaint_all=false);
    void DoDrawPlayRegion(wxDC * dc);
 
-   double Pos2Time(int p);
-   int Time2Pos(double t);
-   int Seconds2Pixels(double t);
+   enum class MenuChoice { QuickPlay, Scrub };
+   void ShowContextMenu( MenuChoice choice, const wxPoint *pPosition);
+
+   double Pos2Time(int p, bool ignoreFisheye = false);
+   int Time2Pos(double t, bool ignoreFisheye = false);
 
    bool IsWithinMarker(int mousePosX, double markerTime);
 
-   Ruler  ruler;
-   ViewInfo *mViewInfo;
-   AudacityProject *mProject;
+private:
 
-   wxBitmap *mBuffer;
+   wxCursor mCursorDefault;
+   wxCursor mCursorHand;
+   wxCursor mCursorSizeWE;
+   bool mIsWE;
+
+   Ruler mRuler;
+   ViewInfo *const mViewInfo;
+   AudacityProject *const mProject;
+   TrackList *mTracks;
 
    wxRect mOuter;
+   wxRect mScrubZone;
    wxRect mInner;
 
    int mLeftOffset;  // Number of pixels before we hit the 'zero position'.
 
-   double mCurPos;
 
-   int    mIndType;     // -1 = No indicator, 0 = Play, 1 = Record
-   double mIndPos;
-   bool   mQuickPlayInd;
+   double mIndTime;
    double mQuickPlayPos;
-   SnapManager *mSnapManager;
+
+   std::unique_ptr<SnapManager> mSnapManager;
+   bool mIsSnapped;
 
    bool   mPlayRegionLock;
    double mPlayRegionStart;
@@ -326,6 +417,7 @@ private:
    // Pop-up menu
    //
    void ShowMenu(const wxPoint & pos);
+   void ShowScrubMenu(const wxPoint & pos);
    void DragSelection();
    void HandleSnapping();
    void OnToggleQuickPlay(wxCommandEvent &evt);
@@ -334,10 +426,13 @@ private:
    void OnAutoScroll(wxCommandEvent &evt);
    void OnLockPlayRegion(wxCommandEvent &evt);
 
+   void OnContextMenu(wxContextMenuEvent & WXUNUSED(event));
+
+   void OnTogglePinnedState(wxCommandEvent & event);
+
    bool mPlayRegionDragsSelection;
    bool mTimelineToolTip;
    bool mQuickPlayEnabled;
-
 
    enum MouseEventState {
       mesNone,
@@ -352,7 +447,18 @@ private:
    int mLastMouseX;  // Pixel position
    bool mIsDragging;
 
+   std::unique_ptr<QuickPlayIndicatorOverlay> mOverlay;
+
+   StatusChoice mPrevZone { StatusChoice::NoChange };
+
+   bool mShowScrubbing { false };
+
    DECLARE_EVENT_TABLE()
+
+   friend QuickPlayRulerOverlay;
+
+   wxWindow *mButtons[3];
+   bool mNeedButtonUpdate { true };
 };
 
 #endif //define __AUDACITY_RULER__

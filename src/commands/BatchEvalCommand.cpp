@@ -22,17 +22,17 @@ wxString BatchEvalCommandType::BuildName()
 
 void BatchEvalCommandType::BuildSignature(CommandSignature &signature)
 {
-   Validator *commandNameValidator(new Validator());
-   signature.AddParameter(wxT("CommandName"), wxT(""), commandNameValidator);
-   Validator *paramValidator(new Validator());
-   signature.AddParameter(wxT("ParamString"), wxT(""), paramValidator);
-   Validator *chainValidator(new Validator());
-   signature.AddParameter(wxT("ChainName"), wxT(""), chainValidator);
+   auto commandNameValidator = make_movable<DefaultValidator>();
+   signature.AddParameter(wxT("CommandName"), wxT(""), std::move(commandNameValidator));
+   auto paramValidator = make_movable<DefaultValidator>();
+   signature.AddParameter(wxT("ParamString"), wxT(""), std::move(paramValidator));
+   auto chainValidator = make_movable<DefaultValidator>();
+   signature.AddParameter(wxT("ChainName"), wxT(""), std::move(chainValidator));
 }
 
-Command *BatchEvalCommandType::Create(CommandOutputTarget *target)
+CommandHolder BatchEvalCommandType::Create(std::unique_ptr<CommandOutputTarget> &&target)
 {
-   return new BatchEvalCommand(*this, target);
+   return std::make_shared<BatchEvalCommand>(*this, std::move(target));
 }
 
 bool BatchEvalCommand::Apply(CommandExecutionContext WXUNUSED(context))

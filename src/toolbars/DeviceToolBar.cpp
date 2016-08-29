@@ -15,6 +15,7 @@
 
 
 #include "../Audacity.h"
+#include "DeviceToolBar.h"
 
 // For compilers that support precompilation, includes "wx/wx.h".
 #include <wx/wxprec.h>
@@ -31,7 +32,6 @@
 
 #include "../AudacityApp.h"
 
-#include "DeviceToolBar.h"
 #include "ToolDock.h"
 #include "../TrackPanel.h"
 
@@ -41,6 +41,7 @@
 #include "../ImageManipulation.h"
 #include "../Prefs.h"
 #include "../Project.h"
+#include "../ShuttleGui.h"
 #include "../Theme.h"
 #include "../widgets/Grabber.h"
 #include "../DeviceManager.h"
@@ -66,8 +67,6 @@ DeviceToolBar::DeviceToolBar()
 
 DeviceToolBar::~DeviceToolBar()
 {
-   delete mPlayBitmap;
-   delete mRecordBitmap;
 }
 
 void DeviceToolBar::Create(wxWindow *parent)
@@ -75,18 +74,9 @@ void DeviceToolBar::Create(wxWindow *parent)
    ToolBar::Create(parent);
 
    // Simulate a size event to set initial meter placement/size
-#if wxCHECK_VERSION(3, 0, 0)
    wxSizeEvent event(GetSize(), GetId());
    event.SetEventObject(this);
    GetEventHandler()->ProcessEvent(event);
-#else
-   wxSizeEvent dummy;
-   OnSize(dummy);
-#endif
-}
-
-void DeviceToolBar::RecreateTipWindows()
-{
 }
 
 void DeviceToolBar::DeinitChildren()
@@ -101,50 +91,44 @@ void DeviceToolBar::Populate()
 {
    DeinitChildren();
    // Hosts
-   mHost = new wxChoice(this,
+   mHost = safenew wxChoice(this,
                         wxID_ANY,
                         wxDefaultPosition,
                         wxDefaultSize);
-   mHost->SetName(_("Audio Host"));
 
    Add(mHost, 0, wxALIGN_CENTER);
 
    // Input device
    if( mRecordBitmap == NULL )
-      mRecordBitmap = new wxBitmap(theTheme.Bitmap(bmpMic));
+      mRecordBitmap = std::make_unique<wxBitmap>(theTheme.Bitmap(bmpMic));
 
-   Add(new wxStaticBitmap(this,
+   Add(safenew wxStaticBitmap(this,
                           wxID_ANY,
                           *mRecordBitmap), 0, wxALIGN_CENTER);
 
-   mInput = new wxChoice(this,
+   mInput = safenew wxChoice(this,
                          wxID_ANY,
                          wxDefaultPosition,
                          wxDefaultSize);
-   /* i18n-hint: (noun) It's the device used for recording.*/
-   mInput->SetName(_("Recording Device"));
    Add(mInput, 0, wxALIGN_CENTER);
 
-   mInputChannels = new wxChoice(this,
+   mInputChannels = safenew wxChoice(this,
                          wxID_ANY,
                          wxDefaultPosition,
                          wxDefaultSize);
-   mInputChannels->SetName(_("Recording Channels"));
    Add(mInputChannels, 0, wxALIGN_CENTER);
 
    // Output device
    if( mPlayBitmap == NULL )
-      mPlayBitmap = new wxBitmap(theTheme.Bitmap(bmpSpeaker));
-   Add(new wxStaticBitmap(this,
+      mPlayBitmap = std::make_unique<wxBitmap>(theTheme.Bitmap(bmpSpeaker));
+   Add(safenew wxStaticBitmap(this,
                           wxID_ANY,
                           *mPlayBitmap), 0, wxALIGN_CENTER);
 
-   mOutput = new wxChoice(this,
+   mOutput = safenew wxChoice(this,
                                wxID_ANY,
                                wxDefaultPosition,
                                wxDefaultSize);
-   /* i18n-hint: (noun) It's the device used for playback.*/
-   mOutput->SetName(_("Playback Device"));
    Add(mOutput, 0, wxALIGN_CENTER);
 
 
@@ -183,6 +167,8 @@ void DeviceToolBar::Populate()
                  NULL,
                  this);
 
+   SetNames();
+
    RefillCombos();
 }
 
@@ -197,13 +183,12 @@ void DeviceToolBar::RefillCombos()
 
 void DeviceToolBar::OnFocus(wxFocusEvent &event)
 {
-   wxCommandEvent e(EVT_CAPTURE_KEYBOARD);
-
    if (event.GetEventType() == wxEVT_KILL_FOCUS) {
-      e.SetEventType(EVT_RELEASE_KEYBOARD);
+      AudacityProject::ReleaseKeyboard(this);
    }
-   e.SetEventObject(this);
-   GetParent()->GetEventHandler()->ProcessEvent(e);
+   else {
+      AudacityProject::CaptureKeyboard(this);
+   }
 
    Refresh(false);
 
@@ -356,9 +341,20 @@ void DeviceToolBar::EnableDisableButtons()
    }
 }
 
+void DeviceToolBar::SetNames()
+{
+   /* i18n-hint: (noun) It's the device used for playback.*/
+   mOutput->SetName(_("Playback Device"));
+   /* i18n-hint: (noun) It's the device used for recording.*/
+   mInput->SetName(_("Recording Device"));
+   mHost->SetName(_("Audio Host"));
+   mInputChannels->SetName(_("Recording Channels"));
+}
+
 void DeviceToolBar::RegenerateTooltips()
 {
 #if wxUSE_TOOLTIPS
+   SetNames();
    mOutput->SetToolTip(mOutput->GetName() + wxT(" - ") + mOutput->GetStringSelection());
    mInput->SetToolTip(mInput->GetName() + wxT(" - ") + mInput->GetStringSelection());
    mHost->SetToolTip(mHost->GetName() + wxT(" - ") + mHost->GetStringSelection());
@@ -448,20 +444,26 @@ void DeviceToolBar::RepositionCombos()
       return;
 
    // set up initial sizes and ratios
+   // Note that the y values of the desired sizes are not changed, so that the height
+   // of the toolbar is not changed
    hostRatio     = kHostWidthRatio;
    inputRatio    = kInputWidthRatio;
    outputRatio   = kOutputWidthRatio;
    channelsRatio = kChannelsWidthRatio;
 
-   desiredHost     = mHost->GetBestSize();
-   desiredInput    = mInput->GetBestSize();
-   desiredOutput   = mOutput->GetBestSize();
-   desiredChannels = mInputChannels->GetBestSize();
+   desiredHost.x     = mHost->GetBestSize().x;
+   desiredHost.y     = mHost->GetSize().y;
+   desiredInput.x    = mInput->GetBestSize().x;
+   desiredInput.y    = mInput->GetSize().y;
+   desiredOutput.x   = mOutput->GetBestSize().x;
+   desiredOutput.y   = mOutput->GetSize().y;
+   desiredChannels.x = mInputChannels->GetBestSize().x;
+   desiredChannels.y = mInputChannels->GetSize().y;
 
-   // wxGtk has larger comboboxes than the other platforms.  For DeviceToolBar this will cause
-   // the height to be double because of the discrete grid layout.  So we shrink it to prevent this.
+   // wxGtk (Gnome) has larger comboboxes than the other platforms.  For DeviceToolBar this prevents
+   // the toolbar docking on a single height row. So we shrink it to prevent this.
 #ifdef __WXGTK__
-   desiredHost.SetHeight(desiredHost.GetHeight() -4);
+   desiredHost.SetHeight(mHost->GetBestSize().y -4);
    desiredInput.SetHeight(desiredHost.GetHeight());
    desiredOutput.SetHeight(desiredHost.GetHeight());
    desiredChannels.SetHeight(desiredHost.GetHeight());
@@ -760,7 +762,7 @@ void DeviceToolBar::OnChoice(wxCommandEvent &event)
    }
 
    // Update all projects' DeviceToolBar.
-   for (size_t i = 0; i < gAudacityProjects.GetCount(); i++) {
+   for (size_t i = 0; i < gAudacityProjects.size(); i++) {
       gAudacityProjects[i]->GetDeviceToolBar()->UpdatePrefs();
    }
 }
@@ -792,7 +794,8 @@ void DeviceToolBar::ShowComboDialog(wxChoice *combo, const wxString &title)
 #if USE_PORTMIXER
    wxArrayString inputSources = combo->GetStrings();
 
-   wxDialog dlg(NULL, wxID_ANY, title);
+   wxDialogWrapper dlg(nullptr, wxID_ANY, title);
+   dlg.SetName(dlg.GetTitle());
    ShuttleGui S(&dlg, eIsCreating);
    wxChoice *c;
 
@@ -805,11 +808,11 @@ void DeviceToolBar::ShowComboDialog(wxChoice *combo, const wxString &title)
                          &inputSources);
       }
       S.EndHorizontalLay();
-      S.AddStandardButtons();
    }
    S.EndVerticalLay();
+   S.AddStandardButtons();
 
-   dlg.SetSize(dlg.GetSizer()->GetMinSize());
+   dlg.GetSizer()->SetSizeHints(&dlg);
    dlg.Center();
 
    if (dlg.ShowModal() == wxID_OK)

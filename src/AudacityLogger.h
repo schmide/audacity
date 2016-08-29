@@ -16,6 +16,7 @@
 
 #include "Audacity.h"
 
+#include "MemoryX.h"
 #include <wx/event.h>
 #include <wx/log.h>
 #include <wx/frame.h>
@@ -24,7 +25,7 @@
 
 #include "Experimental.h"
 
-class AudacityLogger:public wxEvtHandler, public wxLog {
+class AudacityLogger final : public wxEvtHandler, public wxLog {
  public:
    AudacityLogger();
    virtual ~AudacityLogger();
@@ -37,8 +38,8 @@ class AudacityLogger:public wxEvtHandler, public wxLog {
 #endif
 
  protected:
-   virtual void Flush();
-   virtual void DoLogString(const wxChar *szString, time_t t);
+   void Flush()  override;
+   void DoLogText(const wxString & msg) override;
 
  private:
    void OnCloseWindow(wxCloseEvent & e);
@@ -46,7 +47,7 @@ class AudacityLogger:public wxEvtHandler, public wxLog {
    void OnClear(wxCommandEvent & e);
    void OnSave(wxCommandEvent & e);
 
-   wxFrame *mFrame;
+   Destroy_ptr<wxFrame> mFrame;
    wxTextCtrl *mText;
    wxString mBuffer;
    bool mUpdated;

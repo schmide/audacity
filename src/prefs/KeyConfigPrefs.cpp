@@ -14,18 +14,21 @@
 \brief A PrefsPanel for keybindings.
 
 The code for displaying keybindings is similar to code in MousePrefs.
-It would be nice to create a new 'Bindings' class which both
+It would be nice to create a NEW 'Bindings' class which both
 KeyConfigPrefs and MousePrefs use.
 
 *//*********************************************************************/
 
 #include "../Audacity.h"
+#include "../Experimental.h"
+#include "KeyConfigPrefs.h"
 
 #include <wx/defs.h>
 #include <wx/ffile.h>
 #include <wx/intl.h>
 #include <wx/filedlg.h>
 #include <wx/button.h>
+#include <wx/msgdlg.h>
 
 #include "../Prefs.h"
 #include "../Project.h"
@@ -35,7 +38,6 @@ KeyConfigPrefs and MousePrefs use.
 
 #include "../Internat.h"
 #include "../ShuttleGui.h"
-#include "KeyConfigPrefs.h"
 
 #include "FileDialog.h"
 
@@ -75,8 +77,8 @@ END_EVENT_TABLE()
 KeyConfigPrefs::KeyConfigPrefs(wxWindow * parent)
 :  PrefsPanel(parent, _("Keyboard")),
    mView(NULL),
-   mFilter(NULL),
    mKey(NULL),
+   mFilter(NULL),
    mFilterTimer(this, FilterTimerID),
    mFilterPending(false)
 {
@@ -198,7 +200,7 @@ void KeyConfigPrefs::PopulateOrExchange(ShuttleGui & S)
             mFilterLabel = S.AddVariableText(_("Searc&h:"));
 
             if (!mFilter) {
-               mFilter = new wxTextCtrl(this,
+               mFilter = safenew wxTextCtrl(this,
                                         FilterID,
                                         wxT(""),
                                         wxDefaultPosition,
@@ -218,7 +220,7 @@ void KeyConfigPrefs::PopulateOrExchange(ShuttleGui & S)
                                 NULL,
                                 this);
             }
-            S.AddWindow(mFilter, wxALIGN_RIGHT);
+            S.AddWindow(mFilter, wxALIGN_NOT | wxALIGN_LEFT);
          }
          S.EndHorizontalLay();
       }
@@ -228,7 +230,7 @@ void KeyConfigPrefs::PopulateOrExchange(ShuttleGui & S)
       S.StartHorizontalLay(wxEXPAND, 1);
       {
          if (!mView) {
-            mView = new KeyView(this, CommandsListID);
+            mView = safenew KeyView(this, CommandsListID);
             mView->SetName(_("Bindings"));
          }
          S.Prop(true);
@@ -239,7 +241,7 @@ void KeyConfigPrefs::PopulateOrExchange(ShuttleGui & S)
       S.StartThreeColumn();
       {
          if (!mKey) {
-            mKey = new wxTextCtrl(this,
+            mKey = safenew wxTextCtrl(this,
                                   CurrentComboID,
                                   wxT(""),
                                   wxDefaultPosition,
@@ -382,13 +384,11 @@ void KeyConfigPrefs::OnExport(wxCommandEvent & WXUNUSED(event))
       mManager->WriteXML(prefFile);
       prefFile.Close();
    }
-   catch (XMLFileWriterException* pException)
+   catch (const XMLFileWriterException &)
    {
       wxMessageBox(_("Couldn't write to file: ") + file,
                    _("Error Exporting Keyboard Shortcuts"),
                    wxOK | wxCENTRE, this);
-
-      delete pException;
    }
 }
 
@@ -408,7 +408,7 @@ void KeyConfigPrefs::OnHotkeyKeyDown(wxKeyEvent & e)
    wxTextCtrl *t = (wxTextCtrl *)e.GetEventObject();
 
    // Make sure we can navigate away from the hotkey textctrl.
-   // On Linux and OSX, it an get stuck, but it doesn't hurt
+   // On Linux and OSX, it can get stuck, but it doesn't hurt
    // to do it for Windows as well.
    //
    // Mac note:  Don't waste time trying to figure out why the
@@ -416,12 +416,9 @@ void KeyConfigPrefs::OnHotkeyKeyDown(wxKeyEvent & e)
    // active, buttons on the Mac do not accept focus and all the
    // controls between this one and the tree control are buttons.
    if (e.GetKeyCode() == WXK_TAB) {
-      wxNavigationKeyEvent nevent;
-      nevent.SetWindowChange(e.ControlDown());
-      nevent.SetDirection(!e.ShiftDown());
-      nevent.SetEventObject(t);
-      nevent.SetCurrentFocus(t);
-      t->GetParent()->GetEventHandler()->ProcessEvent(nevent);
+      NavigateIn(e.ShiftDown()
+                 ? wxNavigationKeyEvent::IsBackward
+                 : wxNavigationKeyEvent::IsForward);
       return;
    }
 
@@ -772,7 +769,7 @@ void KeyConfigPrefs::PopulateOrExchange(ShuttleGui & S)
       S.StartThreeColumn();
       {
          if (!mKey) {
-            mKey = new wxTextCtrl(this,
+            mKey = safenew wxTextCtrl(this,
                                   CurrentComboID,
                                   wxT(""),
                                   wxDefaultPosition,
@@ -968,13 +965,11 @@ void KeyConfigPrefs::OnExport(wxCommandEvent & WXUNUSED(event))
       mManager->WriteXML(prefFile);
       prefFile.Close();
    }
-   catch (XMLFileWriterException* pException)
+   catch (const XMLFileWriterException &)
    {
       wxMessageBox(_("Couldn't write to file: ") + file,
                    _("Error Exporting Keyboard Shortcuts"),
                    wxOK | wxCENTRE, this);
-
-      delete pException;
    }
 }
 
@@ -1211,3 +1206,9 @@ void KeyConfigPrefs::Cancel()
 }
 
 #endif
+
+PrefsPanel *KeyConfigPrefsFactory::Create(wxWindow *parent)
+{
+   wxASSERT(parent); // to justify safenew
+   return safenew KeyConfigPrefs(parent);
+}

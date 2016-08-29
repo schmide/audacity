@@ -16,6 +16,7 @@ tasks associated with a WaveTrack.
 
 *//*******************************************************************/
 
+#include "../Audacity.h"
 #include "ODWaveTrackTaskQueue.h"
 #include "ODTask.h"
 #include "ODManager.h"
@@ -26,13 +27,13 @@ ODWaveTrackTaskQueue::ODWaveTrackTaskQueue()
 
 ODWaveTrackTaskQueue::~ODWaveTrackTaskQueue()
 {
-   //we need to delete all ODTasks.  We will have to block or wait until block for the active ones.
+   //we need to DELETE all ODTasks.  We will have to block or wait until block for the active ones.
    for(unsigned int i=0;i<mTasks.size();i++)
    {
       mTasks[i]->TerminateAndBlock();//blocks if active.
       //small chance we may have rea-added the task back into the queue from a diff thread.  - so remove it if we have.
-      ODManager::Instance()->RemoveTaskIfInQueue(mTasks[i]);
-      delete mTasks[i];
+      ODManager::Instance()->RemoveTaskIfInQueue(mTasks[i].get());
+      mTasks[i].reset();
    }
 
 }
@@ -100,10 +101,12 @@ void ODWaveTrackTaskQueue::AddWaveTrack(WaveTrack* track)
    mTracksMutex.Unlock();
 }
 
-void ODWaveTrackTaskQueue::AddTask(ODTask* task)
+void ODWaveTrackTaskQueue::AddTask(movable_ptr<ODTask> &&mtask)
 {
+   ODTask *task = mtask.get();
+
    mTasksMutex.Lock();
-   mTasks.push_back(task);
+   mTasks.push_back(std::move(mtask));
    mTasksMutex.Unlock();
 
    //take all of the tracks in the task.
@@ -163,17 +166,16 @@ void ODWaveTrackTaskQueue::MakeWaveTrackIndependent(WaveTrack* track)
 
          //clone the items in order and add them to the ODManager.
          mTasksMutex.Lock();
-         ODTask* task;
          for(unsigned int j=0;j<mTasks.size();j++)
          {
-            task=mTasks[j]->Clone();
+            auto task = mTasks[j]->Clone();
             task->AddWaveTrack(track);
             //AddNewTask requires us to relinquish this lock. However, it is safe because ODManager::MakeWaveTrackIndependent
             //has already locked the m_queuesMutex.
             mTasksMutex.Unlock();
             //AddNewTask locks the m_queuesMutex which is already locked by ODManager::MakeWaveTrackIndependent,
             //so we pass a boolean flag telling it not to lock again.
-            ODManager::Instance()->AddNewTask(task,false);
+            ODManager::Instance()->AddNewTask(std::move(task), false);
             mTasksMutex.Lock();
          }
          mTasksMutex.Unlock();
@@ -202,7 +204,7 @@ void ODWaveTrackTaskQueue::DemandTrackUpdate(WaveTrack* track, double seconds)
 }
 
 
-//Replaces all instances of a wavetracck with a new one (effectively transferes the task.)
+//Replaces all instances of a wavetracck with a NEW one (effectively transferes the task.)
 void ODWaveTrackTaskQueue::ReplaceWaveTrack(WaveTrack* oldTrack, WaveTrack* newTrack)
 {
    if(oldTrack)
@@ -257,7 +259,7 @@ ODTask* ODWaveTrackTaskQueue::GetTask(size_t x)
    ODTask* ret = NULL;
    mTasksMutex.Lock();
    if (x < mTasks.size())
-      ret = mTasks[x];
+      ret = mTasks[x].get();
    mTasksMutex.Unlock();
    return ret;
 }
@@ -285,7 +287,7 @@ bool ODWaveTrackTaskQueue::IsFrontTaskComplete()
    mTasksMutex.Lock();
    if(mTasks.size())
    {
-      //there is a chance the task got updated and now has more to do, (like when it is joined with a new track)
+      //there is a chance the task got updated and now has more to do, (like when it is joined with a NEW track)
       //check.
       mTasks[0]->RecalculatePercentComplete();
       bool ret;
@@ -305,7 +307,6 @@ void ODWaveTrackTaskQueue::RemoveFrontTask()
    if(mTasks.size())
    {
       //wait for the task to stop running.
-      delete mTasks[0];
       mTasks.erase(mTasks.begin());
    }
    mTasksMutex.Unlock();
@@ -318,14 +319,14 @@ ODTask* ODWaveTrackTaskQueue::GetFrontTask()
    if(mTasks.size())
    {
       mTasksMutex.Unlock();
-      return mTasks[0];
+      return mTasks[0].get();
    }
    mTasksMutex.Unlock();
    return NULL;
 }
 
 ///fills in the status bar message for a given track
-void ODWaveTrackTaskQueue::FillTipForWaveTrack( WaveTrack * t, const wxChar ** ppTip )
+void ODWaveTrackTaskQueue::FillTipForWaveTrack( WaveTrack * t, wxString &tip )
 {
    if(ContainsWaveTrack(t) && GetNumTasks())
    {
@@ -335,7 +336,7 @@ void ODWaveTrackTaskQueue::FillTipForWaveTrack( WaveTrack * t, const wxChar ** p
      // else
        //  msg.Printf(_("%s %d additional tasks remaining."), GetFrontTask()->GetTip().c_str(), GetNumTasks());
 
-      *ppTip = mTipMsg.c_str();
+      tip = mTipMsg.c_str();
 
    }
 }

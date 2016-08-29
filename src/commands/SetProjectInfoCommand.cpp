@@ -19,7 +19,6 @@
 #include "SetProjectInfoCommand.h"
 #include "../Project.h"
 #include "../Track.h"
-#include "../WaveTrack.h"
 
 // The following parameters have a boolean string, indicated by the kSetOfTracksStr
 #define kSetOfTracksStr "TrackSet"
@@ -31,20 +30,20 @@ wxString SetProjectInfoCommandType::BuildName()
 
 void SetProjectInfoCommandType::BuildSignature(CommandSignature &signature)
 {
-   OptionValidator *infoTypeValidator = new OptionValidator();
+   auto infoTypeValidator = make_movable<OptionValidator>();
    infoTypeValidator->AddOption(wxT("SelectedTracks"));
    infoTypeValidator->AddOption(wxT("MuteTracks"));
    infoTypeValidator->AddOption(wxT("SoloTracks"));
 
-   signature.AddParameter(wxT("Type"), wxT("Name"), infoTypeValidator);
+   signature.AddParameter(wxT("Type"), wxT("Name"), std::move(infoTypeValidator));
 
-   BoolArrayValidator *TracksSetValidator = new BoolArrayValidator();
-   signature.AddParameter(wxT(kSetOfTracksStr), wxT("x"), TracksSetValidator);
+   auto TracksSetValidator = make_movable<BoolArrayValidator>();
+   signature.AddParameter(wxT(kSetOfTracksStr), wxT("x"), std::move(TracksSetValidator));
 }
 
-Command *SetProjectInfoCommandType::Create(CommandOutputTarget *target)
+CommandHolder SetProjectInfoCommandType::Create(std::unique_ptr<CommandOutputTarget> &&target)
 {
-   return new SetProjectInfoCommand(*this, target);
+   return std::make_shared<SetProjectInfoCommand>(*this, std::move(target));
 }
 
 
@@ -57,14 +56,14 @@ bool SetProjectInfoCommand::Apply(CommandExecutionContext context)
    wxString settingsString = GetString(wxT(kSetOfTracksStr));
 
    if (mode.IsSameAs(wxT("SelectedTracks")))
-      SetAllTracksParam( context.proj->GetTracks(), settingsString,
+      SetAllTracksParam( context.GetProject()->GetTracks(), settingsString,
 &SetProjectInfoCommand::setSelected);
 
    else if (mode.IsSameAs(wxT("SoloTracks")))
-      SetAllTracksParam( context.proj->GetTracks(), settingsString, &SetProjectInfoCommand::setSolo);
+      SetAllTracksParam( context.GetProject()->GetTracks(), settingsString, &SetProjectInfoCommand::setSolo);
 
    else if (mode.IsSameAs(wxT("MuteTracks")))
-      SetAllTracksParam( context.proj->GetTracks(), settingsString, &SetProjectInfoCommand::setMute);
+      SetAllTracksParam( context.GetProject()->GetTracks(), settingsString, &SetProjectInfoCommand::setMute);
    else
    {
       Error(wxT("Invalid info type!"));
@@ -76,7 +75,7 @@ bool SetProjectInfoCommand::Apply(CommandExecutionContext context)
 
 
 // ***********************  Private Methods *******************
-void SetProjectInfoCommand::SetAllTracksParam(TrackList *projTracks, wxString boolValueStr, Setter functPtrToSetter)
+void SetProjectInfoCommand::SetAllTracksParam(TrackList *projTracks, const wxString &boolValueStr, Setter functPtrToSetter)
 {
    unsigned int i=0;
    TrackListIterator iter(projTracks);

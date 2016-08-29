@@ -15,6 +15,7 @@
 
 #include "ImportExportCommands.h"
 #include "../Project.h"
+#include "../Track.h"
 #include "../export/Export.h"
 
 // Import
@@ -26,19 +27,19 @@ wxString ImportCommandType::BuildName()
 
 void ImportCommandType::BuildSignature(CommandSignature &signature)
 {
-   Validator *filenameValidator(new Validator());
-   signature.AddParameter(wxT("Filename"), wxT(""), filenameValidator);
+   auto filenameValidator = make_movable<DefaultValidator>();
+   signature.AddParameter(wxT("Filename"), wxT(""), std::move(filenameValidator));
 }
 
-Command *ImportCommandType::Create(CommandOutputTarget *target)
+CommandHolder ImportCommandType::Create(std::unique_ptr<CommandOutputTarget> &&target)
 {
-   return new ImportCommand(*this, target);
+   return std::make_shared<ImportCommand>(*this, std::move(target));
 }
 
 bool ImportCommand::Apply(CommandExecutionContext context)
 {
    wxString filename = GetString(wxT("Filename"));
-   return context.proj->Import(filename);
+   return context.GetProject()->Import(filename);
 }
 
 ImportCommand::~ImportCommand()
@@ -53,21 +54,21 @@ wxString ExportCommandType::BuildName()
 
 void ExportCommandType::BuildSignature(CommandSignature &signature)
 {
-   OptionValidator *modeValidator(new OptionValidator());
+   auto modeValidator = make_movable<OptionValidator>();
    modeValidator->AddOption(wxT("All"));
    modeValidator->AddOption(wxT("Selection"));
-   signature.AddParameter(wxT("Mode"), wxT("All"), modeValidator);
+   signature.AddParameter(wxT("Mode"), wxT("All"), std::move(modeValidator));
 
-   Validator *filenameValidator(new Validator());
-   signature.AddParameter(wxT("Filename"), wxT("exported.wav"), filenameValidator);
+   auto filenameValidator = make_movable<DefaultValidator>();
+   signature.AddParameter(wxT("Filename"), wxT("exported.wav"), std::move(filenameValidator));
 
-   IntValidator *channelsValidator(new IntValidator());
-   signature.AddParameter(wxT("Channels"), 1, channelsValidator);
+   auto channelsValidator = make_movable<IntValidator>();
+   signature.AddParameter(wxT("Channels"), 1, std::move(channelsValidator));
 }
 
-Command *ExportCommandType::Create(CommandOutputTarget *target)
+CommandHolder ExportCommandType::Create(std::unique_ptr<CommandOutputTarget> &&target)
 {
-   return new ExportCommand(*this, target);
+   return std::make_shared<ExportCommand>(*this, std::move(target));
 }
 
 bool ExportCommand::Apply(CommandExecutionContext context)
@@ -81,13 +82,13 @@ bool ExportCommand::Apply(CommandExecutionContext context)
    double t0, t1;
    if (selection)
    {
-      t0 = context.proj->mViewInfo.selectedRegion.t0();
-      t1 = context.proj->mViewInfo.selectedRegion.t1();
+      t0 = context.GetProject()->mViewInfo.selectedRegion.t0();
+      t1 = context.GetProject()->mViewInfo.selectedRegion.t1();
    }
    else
    {
       t0 = 0.0;
-      t1 = context.proj->GetTracks()->GetEndTime();
+      t1 = context.GetProject()->GetTracks()->GetEndTime();
    }
 
    // Find the extension and check it's valid
@@ -101,7 +102,7 @@ bool ExportCommand::Apply(CommandExecutionContext context)
 
    Exporter exporter;
 
-   bool exportSuccess = exporter.Process(context.proj, numChannels,
+   bool exportSuccess = exporter.Process(context.GetProject(), numChannels,
                                          extension.c_str(), filename,
                                          selection, t0, t1);
 

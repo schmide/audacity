@@ -20,7 +20,7 @@ ThemePrefs.
   global preferences object gPrefs, and instructing the applicable parts
   of the program to re-read the preference options.
 
-  To actually add a the new panel, edit the PrefsDialog constructor
+  To actually add a the NEW panel, edit the PrefsDialog constructor
   to append the panel to its list of panels.
 
 *//*******************************************************************/
@@ -28,8 +28,8 @@ ThemePrefs.
 #ifndef __AUDACITY_PREFS_PANEL__
 #define __AUDACITY_PREFS_PANEL__
 
-#include <wx/panel.h>
 #include <wx/window.h>
+#include "../widgets/wxPanelWrapper.h"
 
 /* A few constants for an attempt at semi-uniformity */
 #define PREFS_FONT_SIZE     8
@@ -40,25 +40,33 @@ ThemePrefs.
 #define TOP_LEVEL_BORDER       5
 #define GENERIC_CONTROL_BORDER 5
 
-class PrefsPanel:public wxPanel
+class PrefsPanel /* not final */ : public wxPanelWrapper
 {
  public:
-   PrefsPanel(wxWindow * parent, wxString title)
-   :  wxPanel(parent, wxID_ANY)
+   PrefsPanel(wxWindow * parent, const wxString &title)
+   :  wxPanelWrapper(parent, wxID_ANY)
    {
       SetLabel(title);     // Provide visual label
       SetName(title);      // Provide audible label
    }
 
-   virtual ~PrefsPanel()
-   {
-   }
+   virtual ~PrefsPanel();
 
+   // NEW virtuals
    virtual bool Apply() = 0;
 
-   virtual void Cancel()
-   {
-   }
+   // If it returns True, the Apply button is added below the panel
+   // Default returns false
+   virtual bool ShowsApplyButton();
+
+   virtual void Cancel();
+};
+
+class PrefsPanelFactory /* not final */
+{
+public:
+   // Precondition: parent != NULL
+   virtual PrefsPanel *Create(wxWindow *parent) = 0;
 };
 
 #endif

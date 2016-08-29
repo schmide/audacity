@@ -36,13 +36,14 @@
 #include "ErrorDialog.h"
 #include "HelpSystem.h"
 
-const wxString HelpSystem::HelpHostname = wxT("manual.audacityteam.org");
 #if IS_ALPHA
+const wxString HelpSystem::HelpHostname = wxT("alphamanual.audacityteam.org");
 const wxString HelpSystem::HelpServerHomeDir = wxT("/man/");
 const wxString HelpSystem::HelpServerManDir = wxT("/man/");
 #else
-const wxString HelpSystem::HelpServerHomeDir = wxT("/o/");
-const wxString HelpSystem::HelpServerManDir = wxT("/o/man/");
+const wxString HelpSystem::HelpHostname = wxT("manual.audacityteam.org");
+const wxString HelpSystem::HelpServerHomeDir = wxT("/");
+const wxString HelpSystem::HelpServerManDir = wxT("/man/");
 #endif
 const wxString HelpSystem::LocalHelpManDir = wxT("/man/");
 const wxString HelpSystem::ReleaseSuffix = wxT(".html");
@@ -56,11 +57,12 @@ void HelpSystem::ShowInfoDialog( wxWindow *parent,
                      const wxString &message,
                      const int xSize, const int ySize)
 {
-   wxDialog dlog(parent, wxID_ANY,
+   wxDialogWrapper dlog(parent, wxID_ANY,
                 dlogTitle,
                 wxDefaultPosition, wxDefaultSize,
                 wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxMAXIMIZE_BOX /*| wxDEFAULT_FRAME_STYLE */);
 
+   dlog.SetName(dlog.GetTitle());
    ShuttleGui S(&dlog, eIsCreating);
 
    S.StartVerticalLay(1);
@@ -77,7 +79,7 @@ void HelpSystem::ShowInfoDialog( wxWindow *parent,
    S.EndHorizontalLay();
 
    // Next three lines add a tiny dragger.
-   wxStatusBar * pBar = new wxStatusBar( &dlog );
+   wxStatusBar * pBar = safenew wxStatusBar( &dlog );
    pBar->SetSize( 18, 38);
    S.AddWindow( pBar, wxALIGN_BOTTOM|wxALIGN_RIGHT );
 
@@ -98,13 +100,9 @@ void HelpSystem::ShowHtmlText(wxWindow *pParent,
 {
    LinkingHtmlWindow *html;
 
-   BrowserFrame * pWnd;
-   if( bModal )
-      pWnd = new HtmlTextHelpDialog();
-   else
-      pWnd = new BrowserFrame();
-
-   pWnd->Create(pParent, wxID_ANY, Title, wxDefaultPosition, wxDefaultSize,
+   wxASSERT(pParent); // to justify safenew
+   auto pFrame = safenew wxFrame {
+      pParent, wxID_ANY, Title, wxDefaultPosition, wxDefaultSize,
 #if defined(__WXMAC__)
       // On OSX, the html frame can go behind the help dialog and if the help
       // html frame is modal, you can't get back to it.  Pressing escape gets
@@ -113,7 +111,14 @@ void HelpSystem::ShowHtmlText(wxWindow *pParent,
       // but acceptable in this case.
       wxSTAY_ON_TOP |
 #endif
-      wxDEFAULT_FRAME_STYLE);
+      wxDEFAULT_FRAME_STYLE
+   };
+
+   BrowserDialog * pWnd;
+   if( bModal )
+      pWnd = safenew HtmlTextHelpDialog{ pFrame, Title };
+   else
+      pWnd = safenew BrowserDialog{ pFrame, Title };
 
    ShuttleGui S( pWnd, eIsCreating );
 
@@ -133,12 +138,12 @@ void HelpSystem::ShowHtmlText(wxWindow *pParent,
       }
       S.EndHorizontalLay();
 
-      html = new LinkingHtmlWindow(pPan, wxID_ANY,
+      html = safenew LinkingHtmlWindow(pPan, wxID_ANY,
                                    wxDefaultPosition,
                                    bIsFile ? wxSize(500, 400) : wxSize(480, 240),
                                    wxHW_SCROLLBAR_AUTO | wxSUNKEN_BORDER);
 
-      html->SetRelatedFrame( pWnd, wxT("Help: %s") );
+      html->SetRelatedFrame( pFrame, wxT("Help: %s") );
       if( bIsFile )
          html->LoadFile( HtmlText );
       else
@@ -154,23 +159,31 @@ void HelpSystem::ShowHtmlText(wxWindow *pParent,
    // If this section (providing an icon) causes compilation errors on linux, comment it out for now.
    // it will just mean that the icon is missing.  Works OK on Windows.
    #ifdef __WXMSW__
-      wxIcon ic(wxICON(AudacityLogo));
+   wxIcon ic{ wxICON(AudacityLogo) };
    #else
-      wxIcon ic;
+   wxIcon ic{};
       ic.CopyFromBitmap(theTheme.Bitmap(bmpAudacityLogo48x48));
    #endif
-   pWnd->SetIcon( ic );
+   pFrame->SetIcon( ic );
    // -- END of ICON stuff -----
 
 
    pWnd->mpHtml = html;
    pWnd->SetBackgroundColour( wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE));
-   pWnd->CreateStatusBar();
-   pWnd->Centre();
-   pWnd->Layout();
-   pWnd->Fit();
-   pWnd->SetSizeHints(pWnd->GetSize());
-   pWnd->Show( true );
+
+   pFrame->CreateStatusBar();
+   pFrame->Centre();
+   pFrame->Layout();
+   pFrame->Fit();
+   pFrame->SetSizeHints(pWnd->GetSize());
+
+   pFrame->SetName(Title);
+   if (bModal)
+      pWnd->ShowModal();
+   else {
+      pWnd->Show(true);
+      pFrame->Show(true);
+   }
 
    html->SetRelatedStatusBar( 0 );
    html->SetFocus();
@@ -183,6 +196,7 @@ void HelpSystem::ShowHelpDialog(wxWindow *parent,
                     const wxString &remoteURL,
                     bool bModal)
 {
+   wxASSERT(parent); // to justify safenew
    AudacityProject * pProj = GetActiveProject();
    wxString HelpMode = wxT("Local");
 
@@ -329,6 +343,7 @@ void HelpSystem::ShowHelpDialog(wxWindow *parent,
    wxLogMessage(wxT("webHelpPage %s, localHelpPage %s"),
               webHelpPage.c_str(), localHelpPage.c_str());
 
+   wxASSERT(parent); // to justify safenew
    HelpSystem::ShowHelpDialog(
       parent, 
       localHelpPage,

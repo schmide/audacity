@@ -47,6 +47,8 @@ i.e. an alternative to the usual interface, for Audacity.
 
 #include <wx/arrimpl.cpp>
 
+#include "Experimental.h"
+
 #define initFnName      "ExtensionModuleInit"
 #define versionFnName   "GetVersionString"
 #define scriptFnName    "RegScriptServerFunc"
@@ -89,13 +91,12 @@ static tpRegScriptServerFunc scriptFn;
 Module::Module(const wxString & name)
 {
    mName = name;
-   mLib = new wxDynamicLibrary();
+   mLib = std::make_unique<wxDynamicLibrary>();
    mDispatch = NULL;
 }
 
 Module::~Module()
 {
-   delete mLib;
 }
 
 bool Module::Load()
@@ -166,7 +167,7 @@ int Module::Dispatch(ModuleDispatchTypes type)
    return 0;
 }
 
-void * Module::GetSymbol(wxString name)
+void * Module::GetSymbol(const wxString &name)
 {
    return mLib->GetSymbol(name);
 }
@@ -178,18 +179,21 @@ void * Module::GetSymbol(wxString name)
 // ============================================================================
 
 // The one and only ModuleManager
-ModuleManager *ModuleManager::mInstance = NULL;
+std::unique_ptr<ModuleManager> ModuleManager::mInstance{};
 
 // Provide builtin modules a means to identify themselves
-static wxArrayPtrVoid *pBuiltinModuleList = NULL;
+using BuiltinModuleList = std::vector<ModuleMain>;
+namespace {
+   BuiltinModuleList &builtinModuleList()
+   {
+      static BuiltinModuleList theList;
+      return theList;
+   }
+}
+
 void RegisterBuiltinModule(ModuleMain moduleMain)
 {
-   if (pBuiltinModuleList == NULL)
-   {
-      pBuiltinModuleList = new wxArrayPtrVoid;
-   }
-
-   pBuiltinModuleList->Add((void *)moduleMain);
+   builtinModuleList().push_back(moduleMain);
 
    return;
 }
@@ -204,27 +208,8 @@ ModuleManager::ModuleManager()
 
 ModuleManager::~ModuleManager()
 {
-   size_t cnt = mModules.GetCount();
-
-   for (size_t ndx = 0; ndx < cnt; ndx++) {
-      delete (Module *) mModules[ndx];
-   }
-   mModules.Clear();
-
-   ModuleMap::iterator iter = mDynModules.begin();
-   while (iter != mDynModules.end())
-   {
-      UnloadModule(iter->second);
-
-      mDynModules.erase(iter->first);
-
-      iter = mDynModules.begin();
-   }
-
-   if (pBuiltinModuleList != NULL)
-   {
-      delete pBuiltinModuleList;
-   }
+   mDynModules.clear();
+   builtinModuleList().clear();
 }
 
 // static 
@@ -253,11 +238,11 @@ void ModuleManager::Initialize(CommandHandler &cmdHandler)
    wxGetApp().FindFilesInPathList(wxT("*.so"), pathList, files);
    #endif
 
+   wxString saveOldCWD = ::wxGetCwd();
    for (i = 0; i < files.GetCount(); i++) {
       // As a courtesy to some modules that might be bridges to
       // open other modules, we set the current working
       // directory to be the module's directory.
-      wxString saveOldCWD = ::wxGetCwd();
       wxString prefix = ::wxPathOnly(files[i]);
       ::wxSetWorkingDirectory(prefix);
 
@@ -305,10 +290,11 @@ void ModuleManager::Initialize(CommandHandler &cmdHandler)
       ModulePrefs::SetModuleStatus( files[i], kModuleFailed );
 #endif
 
-      Module *module = new Module(files[i]);
-      if (module->Load())   // it will get rejected if there  are version problems
+      auto umodule = make_movable<Module>(files[i]);
+      if (umodule->Load())   // it will get rejected if there  are version problems
       {
-         Get().mModules.Add(module);
+         auto module = umodule.get();
+         Get().mModules.push_back(std::move(umodule));
          // We've loaded and initialised OK.
          // So look for special case functions:
          wxLogNull logNo; // Don't show wxWidgets errors if we can't do these. (Was: Fix bug 544.)
@@ -325,12 +311,9 @@ void ModuleManager::Initialize(CommandHandler &cmdHandler)
          ModulePrefs::SetModuleStatus( files[i], iModuleStatus);
 #endif
       }
-      else {
-         // No need to save status, as we already set kModuleFailed.
-         delete module;
-      }
-      ::wxSetWorkingDirectory(saveOldCWD);
    }
+   ::wxSetWorkingDirectory(saveOldCWD);
+
    // After loading all the modules, we may have a registered scripting function.
    if(scriptFn)
    {
@@ -343,11 +326,7 @@ void ModuleManager::Initialize(CommandHandler &cmdHandler)
 // static
 int ModuleManager::Dispatch(ModuleDispatchTypes type)
 {
-   size_t cnt = Get().mModules.GetCount();
-
-   for (size_t ndx = 0; ndx < cnt; ndx++) {
-      Module *module = (Module *)Get().mModules[ndx];
-
+   for (const auto &module: mModules) {
       module->Dispatch(type);
    }
    return 0;
@@ -363,19 +342,10 @@ ModuleManager & ModuleManager::Get()
 {
    if (!mInstance)
    {
-      mInstance = new ModuleManager();
+      mInstance.reset(safenew ModuleManager);
    }
 
    return *mInstance;
-}
-
-void ModuleManager::Destroy()
-{
-   if (mInstance)
-   {
-      delete mInstance;
-      mInstance = NULL;
-   }
 }
 
 bool ModuleManager::DiscoverProviders()
@@ -427,27 +397,34 @@ void ModuleManager::InitializeBuiltins()
 {
    PluginManager & pm = PluginManager::Get();
 
-   for (size_t i = 0, cnt = pBuiltinModuleList->GetCount(); i < cnt; i++)
+   for (auto moduleMain : builtinModuleList())
    {
-      ModuleInterface *module = ((ModuleMain) (*pBuiltinModuleList)[i])(this, NULL);
+      ModuleInterfaceHandle module {
+         moduleMain(this, NULL), ModuleInterfaceDeleter{}
+      };
 
       if (module->Initialize())
       {
          // Register the provider
-         const PluginID & id = pm.RegisterPlugin(module);
+         ModuleInterface *pInterface = module.get();
+         const PluginID & id = pm.RegisterPlugin(pInterface);
 
          // Need to remember it 
-         mDynModules[id] = module;
+         mDynModules[id] = std::move(module);
 
          // Allow the module to auto-register children
-         module->AutoRegisterPlugins(pm);
+         pInterface->AutoRegisterPlugins(pm);
+      }
+      else
+      {
+         // Don't leak!  Destructor of module does that.
       }
    }
 }
 
 ModuleInterface *ModuleManager::LoadModule(const wxString & path)
 {
-   wxDynamicLibrary *lib = new wxDynamicLibrary();
+   auto lib = make_movable<wxDynamicLibrary>();
 
    if (lib->Load(path, wxDL_NOW))
    {
@@ -456,59 +433,64 @@ ModuleInterface *ModuleManager::LoadModule(const wxString & path)
                                                             &success);
       if (success && audacityMain)
       {
-         ModuleInterface *module = audacityMain(this, &path);
-         if (module)
+         ModuleInterfaceHandle handle {
+            audacityMain(this, &path), ModuleInterfaceDeleter{}
+         };
+         if (handle)
          {
-            if (module->Initialize())
+            if (handle->Initialize())
             {
 
-               mDynModules[PluginManager::GetID(module)] = module;
-               mLibs[module] = lib;
+               auto module = handle.get();
+               mDynModules[PluginManager::GetID(module)] = std::move(handle);
+               mLibs[module] = std::move(lib);
 
                return module;
             }
-            module->Terminate();
-            delete module;
          }
       }
 
       lib->Unload();
    }
 
-   delete lib;
-
    return NULL;
 }
 
-void ModuleManager::UnloadModule(ModuleInterface *module)
+void ModuleInterfaceDeleter::operator() (ModuleInterface *pInterface) const
 {
-   if (module)
+   if (pInterface)
    {
-      module->Terminate();
+      pInterface->Terminate();
 
-      if (mLibs.find(module) != mLibs.end())
-      {
-         mLibs[module]->Unload();
-         mLibs.erase(module);
-      }
+      auto &libs = ModuleManager::Get().mLibs;
 
-      delete module; //After terminating and unloading, we can safely delete the module
+      auto iter = libs.find(pInterface);
+      if (iter != libs.end())
+         libs.erase(iter); // This causes unloading in ~wxDynamicLibrary
+
+      std::unique_ptr < ModuleInterface > { pInterface }; // DELETE it
    }
 }
 
-void ModuleManager::RegisterModule(ModuleInterface *module)
+void ModuleManager::RegisterModule(ModuleInterface *inModule)
 {
-   PluginID id = PluginManager::GetID(module);
+   std::unique_ptr<ModuleInterface> module{ inModule };
+
+   PluginID id = PluginManager::GetID(module.get());
 
    if (mDynModules.find(id) != mDynModules.end())
    {
       // TODO:  Should we complain about a duplicate registeration????
+      // PRL:  Don't leak resources!
+      module->Terminate();
       return;
    }
 
-   mDynModules[id] = module;
+   mDynModules[id] = ModuleInterfaceHandle {
+      module.release(), ModuleInterfaceDeleter{}
+   };
 
-   PluginManager::Get().RegisterPlugin(module);
+   PluginManager::Get().RegisterPlugin(inModule);
 }
 
 void ModuleManager::FindAllPlugins(PluginIDList & providers, wxArrayString & paths)
@@ -572,7 +554,7 @@ IdentInterface *ModuleManager::CreateProviderInstance(const PluginID & providerI
 {
    if (path.IsEmpty() && mDynModules.find(providerID) != mDynModules.end())
    {
-      return mDynModules[providerID];
+      return mDynModules[providerID].get();
    }
 
    return LoadModule(path);

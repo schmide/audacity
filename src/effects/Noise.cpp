@@ -14,6 +14,7 @@
 *//*******************************************************************/
 
 #include "../Audacity.h"
+#include "Noise.h"
 
 #include <math.h>
 
@@ -23,9 +24,8 @@
 #include <wx/valgen.h>
 
 #include "../Prefs.h"
+#include "../ShuttleGui.h"
 #include "../widgets/valnum.h"
-
-#include "Noise.h"
 
 enum kTypes
 {
@@ -56,6 +56,8 @@ EffectNoise::EffectNoise()
 {
    mType = DEF_Type;
    mAmp = DEF_Amp;
+
+   SetLinearEffectFlag(true);
 
    y = z = buf0 = buf1 = buf2 = buf3 = buf4 = buf5 = buf6 = 0;
 }
@@ -102,7 +104,7 @@ sampleCount EffectNoise::ProcessBlock(float **WXUNUSED(inbuf), float **outbuf, s
    {
    default:
    case kWhite: // white
-       for (sampleCount i = 0; i < size; i++)
+       for (decltype(size) i = 0; i < size; i++)
        {
           buffer[i] = mAmp * ((rand() / div) - 1.0f);
        }
@@ -113,7 +115,7 @@ sampleCount EffectNoise::ProcessBlock(float **WXUNUSED(inbuf), float **outbuf, s
 
       // 0.129f is an experimental normalization factor.
       amplitude = mAmp * 0.129f;
-      for (sampleCount i = 0; i < size; i++)
+      for (decltype(size) i = 0; i < size; i++)
       {
          white = (rand() / div) - 1.0f;
          buf0 = 0.99886f * buf0 + 0.0555179f * white;
@@ -140,7 +142,7 @@ sampleCount EffectNoise::ProcessBlock(float **WXUNUSED(inbuf), float **outbuf, s
          ? 9.0 / sqrt(mSampleRate)
          : 0.01f;
  
-      for (sampleCount i = 0; i < size; i++)
+      for (decltype(size) i = 0; i < size; i++)
       {
          white = (rand() / div) - 1.0f;
          z = leakage * y + white * scaling;
@@ -218,24 +220,21 @@ void EffectNoise::PopulateOrExchange(ShuttleGui & S)
    {
       S.AddChoice(_("Noise type:"), wxT(""), &typeChoices)->SetValidator(wxGenericValidator(&mType));
 
-      FloatingPointValidator<double> vldAmp(1, &mAmp, NUM_VAL_NO_TRAILING_ZEROES);
+      FloatingPointValidator<double> vldAmp(6, &mAmp, NUM_VAL_NO_TRAILING_ZEROES);
       vldAmp.SetRange(MIN_Amp, MAX_Amp);
       S.AddTextBox(_("Amplitude (0-1):"), wxT(""), 12)->SetValidator(vldAmp);
 
-      bool isSelection;
-      double duration = GetDuration(&isSelection);
-
       S.AddPrompt(_("Duration:"));
-      mNoiseDurationT = new
+      mNoiseDurationT = safenew
          NumericTextCtrl(NumericConverter::TIME,
-                           S.GetParent(),
-                           wxID_ANY,
-                           isSelection ? _("hh:mm:ss + samples") : _("hh:mm:ss + milliseconds"),
-                           duration,
-                           mProjectRate,
-                           wxDefaultPosition,
-                           wxDefaultSize,
-                           true);
+                         S.GetParent(),
+                         wxID_ANY,
+                         GetDurationFormat(),
+                         GetDuration(),
+                         mProjectRate,
+                         wxDefaultPosition,
+                         wxDefaultSize,
+                         true);
       mNoiseDurationT->SetName(_("Duration"));
       mNoiseDurationT->EnableMenu();
       S.AddWindow(mNoiseDurationT, wxALIGN_LEFT | wxALIGN_CENTER_VERTICAL | wxALL);

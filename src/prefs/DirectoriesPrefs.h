@@ -14,17 +14,17 @@
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
 
-#include "../ShuttleGui.h"
-
 #include "PrefsPanel.h"
 
-class DirectoriesPrefs:public PrefsPanel
+class ShuttleGui;
+
+class DirectoriesPrefs final : public PrefsPanel
 {
  public:
    DirectoriesPrefs(wxWindow * parent);
    ~DirectoriesPrefs();
-   virtual bool Apply();
-   virtual bool Validate();
+   bool Apply() override;
+   bool Validate() override;
 
  private:
    void Populate();
@@ -38,4 +38,9 @@ class DirectoriesPrefs:public PrefsPanel
    DECLARE_EVENT_TABLE();
 };
 
+class DirectoriesPrefsFactory final : public PrefsPanelFactory
+{
+public:
+   PrefsPanel *Create(wxWindow *parent) override;
+};
 #endif

@@ -15,13 +15,11 @@
 
 #include <wx/string.h>
 
-#include "../WaveTrack.h"
-
 #include "Effect.h"
 
 #define REVERSE_PLUGIN_SYMBOL XO("Reverse")
 
-class EffectReverse : public Effect
+class EffectReverse final : public Effect
 {
 public:
    EffectReverse();
@@ -29,17 +27,17 @@ public:
 
    // IdentInterface implementation
 
-   virtual wxString GetSymbol();
-   virtual wxString GetDescription();
+   wxString GetSymbol() override;
+   wxString GetDescription() override;
 
    // EffectIdentInterface implementation
 
-   virtual EffectType GetType();
-   virtual bool IsInteractive();
+   EffectType GetType() override;
+   bool IsInteractive() override;
 
    // Effect implementation
 
-   virtual bool Process();
+   bool Process() override;
 
 private:
    // EffectReverse implementation

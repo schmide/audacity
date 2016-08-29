@@ -17,6 +17,38 @@
 #include "LoadNyquist.h"
 
 // ============================================================================
+// List of effects that ship with Audacity.  These will be autoregistered.
+// ============================================================================
+const static wxChar *kShippedEffects[] =
+{
+   wxT("adjustable-fade.ny"),
+   wxT("beat.ny"),
+   wxT("clicktrack.ny"),
+   wxT("clipfix.ny"),
+   wxT("crossfadeclips.ny"),
+   wxT("crossfadetracks.ny"),
+   wxT("delay.ny"),
+   wxT("equalabel.ny"),
+   wxT("highpass.ny"),
+   wxT("limiter.ny"),
+   wxT("lowpass.ny"),
+   wxT("notch.ny"),
+   wxT("pluck.ny"),
+   wxT("rissetdrum.ny"),
+   wxT("sample-data-export.ny"),
+   wxT("SilenceMarker.ny"),
+   wxT("SoundFinder.ny"),
+   wxT("SpectralEditMulti.ny"),
+   wxT("SpectralEditParametricEQ.ny"),
+   wxT("SpectralEditShelves.ny"),
+   wxT("StudioFadeOut.ny"),
+   wxT("tremolo.ny"),
+   wxT("vocalrediso.ny"),
+   wxT("vocalremover.ny"),
+   wxT("vocoder.ny"),
+};
+
+// ============================================================================
 // Module registration entry point
 //
 // This is the symbol that Audacity looks for when the module is built as a
@@ -28,7 +60,8 @@
 DECLARE_MODULE_ENTRY(AudacityModule)
 {
    // Create and register the importer
-   return new NyquistEffectsModule(moduleManager, path);
+   // Trust the module manager not to leak this
+   return safenew NyquistEffectsModule(moduleManager, path);
 }
 
 // ============================================================================
@@ -125,9 +158,32 @@ void NyquistEffectsModule::Terminate()
    return;
 }
 
-bool NyquistEffectsModule::AutoRegisterPlugins(PluginManagerInterface & WXUNUSED(pm))
+bool NyquistEffectsModule::AutoRegisterPlugins(PluginManagerInterface & pm)
 {
-   // Nothing to do here
+   // Autoregister effects that we "think" are ones that have been shipped with
+   // Audacity.  A little simplistic, but it should suffice for now.
+   wxArrayString pathList = NyquistEffect::GetNyquistSearchPath();
+   wxArrayString files;
+
+   if (!pm.IsPluginRegistered(NYQUIST_PROMPT_ID))
+   {
+      RegisterPlugin(pm, NYQUIST_PROMPT_ID);
+   }
+
+   for (int i = 0; i < WXSIZEOF(kShippedEffects); i++)
+   {
+      files.Clear();
+      pm.FindFilesInPathList(kShippedEffects[i], pathList, files);
+      for (size_t j = 0, cnt = files.GetCount(); j < cnt; j++)
+      {
+         if (!pm.IsPluginRegistered(files[j]))
+         {
+            RegisterPlugin(pm, files[j]);
+         }
+      }
+   }
+
+   // We still want to be called during the normal registration process
    return false;
 }
 
@@ -141,7 +197,7 @@ wxArrayString NyquistEffectsModule::FindPlugins(PluginManagerInterface & pm)
    
    // Load .ny plug-ins
    pm.FindFilesInPathList(wxT("*.ny"), pathList, files);
-   // LLL:  Works for all platform with new plugin support (dups are removed)
+   // LLL:  Works for all platform with NEW plugin support (dups are removed)
    pm.FindFilesInPathList(wxT("*.NY"), pathList, files); // Ed's fix for bug 179
 
    return files;
@@ -171,24 +227,22 @@ bool NyquistEffectsModule::IsPluginValid(const wxString & path)
 
 IdentInterface *NyquistEffectsModule::CreateInstance(const wxString & path)
 {
-   NyquistEffect *effect = new NyquistEffect(path);
+   // Acquires a resource for the application.
+   auto effect = std::make_unique<NyquistEffect>(path);
    if (effect->IsOk())
    {
-      return effect;
+      // Safety of this depends on complementary calls to DeleteInstance on the module manager side.
+      return effect.release();
    }
-
-   delete effect;
 
    return NULL;
 }
 
 void NyquistEffectsModule::DeleteInstance(IdentInterface *instance)
 {
-   NyquistEffect *effect = dynamic_cast<NyquistEffect *>(instance);
-   if (effect)
-   {
-      delete effect;
-   }
+   std::unique_ptr < NyquistEffect > {
+      dynamic_cast<NyquistEffect *>(instance)
+   };
 }
 
 // ============================================================================

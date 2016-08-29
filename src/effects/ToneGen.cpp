@@ -19,6 +19,7 @@ frequency changes smoothly during the tone.
 *//*******************************************************************/
 
 #include "../Audacity.h"
+#include "ToneGen.h"
 
 #include <math.h>
 #include <float.h>
@@ -27,10 +28,9 @@ frequency changes smoothly during the tone.
 #include <wx/valgen.h>
 
 #include "../Project.h"
+#include "../ShuttleGui.h"
 #include "../widgets/NumericTextCtrl.h"
 #include "../widgets/valnum.h"
-
-#include "ToneGen.h"
 
 enum kInterpolations
 {
@@ -105,6 +105,12 @@ EffectToneGen::EffectToneGen(bool isChirp)
    {
       mInterpolations.Add(wxGetTranslation(kInterStrings[i]));
    }
+   // Chirp varies over time so must use selected duration.
+   // TODO: When previewing, calculate only the first 'preview length'.
+   if (isChirp)
+      SetLinearEffectFlag(false);
+   else
+      SetLinearEffectFlag(true);
 }
 
 EffectToneGen::~EffectToneGen()
@@ -123,8 +129,8 @@ wxString EffectToneGen::GetSymbol()
 wxString EffectToneGen::GetDescription()
 {
    return mChirp
-      ? XO("Generates four different types of tone waveform while allowing starting and ending amplitude and frequency")
-      : XO("Generates four different types of tone waveform");
+      ? XO("Generates an ascending or descending tone of one of four types")
+      : XO("Generates a constant frequency tone of one of four types");
 }
 
 // EffectIdentInterface implementation
@@ -153,7 +159,6 @@ sampleCount EffectToneGen::ProcessBlock(float **WXUNUSED(inBlock), float **outBl
 {
    float *buffer = outBlock[0];
    double throwaway = 0;        //passed to modf but never used
-   sampleCount i;
    double f = 0.0;
    double a, b;
    int k;
@@ -190,7 +195,7 @@ sampleCount EffectToneGen::ProcessBlock(float **WXUNUSED(inBlock), float **outBl
    }
 
    // synth loop
-   for (i = 0; i < blockLen; i++)
+   for (decltype(blockLen) i = 0; i < blockLen; i++)
    {
       switch (mWaveform)
       {
@@ -252,16 +257,16 @@ bool EffectToneGen::GetAutomationParameters(EffectAutomationParameters & parms)
       parms.Write(KEY_Amplitude, mAmplitude[0]);
    }
 
-   parms.Write(KEY_Waveform, mWaveforms[mWaveform]);
-   parms.Write(KEY_Interp, mInterpolations[mInterpolation]);
+   parms.Write(KEY_Waveform, kWaveStrings[mWaveform]);
+   parms.Write(KEY_Interp, kInterStrings[mInterpolation]);
 
    return true;
 }
 
 bool EffectToneGen::SetAutomationParameters(EffectAutomationParameters & parms)
 {
-   ReadAndVerifyEnum(Waveform, mWaveforms);
-   ReadAndVerifyEnum(Interp, mInterpolations);
+   ReadAndVerifyEnum(Waveform,  wxArrayString(kNumWaveforms, kWaveStrings));
+   ReadAndVerifyEnum(Interp, wxArrayString(kNumInterpolations, kInterStrings));
    if (mChirp)
    {
       ReadAndVerifyDouble(StartFreq);
@@ -388,20 +393,17 @@ void EffectToneGen::PopulateOrExchange(ShuttleGui & S)
          t->SetValidator(vldAmplitude);
       }
 
-      bool isSelection;
-      double duration = GetDuration(&isSelection);
-
       S.AddPrompt(_("Duration:"));
-      mToneDurationT = new
+      mToneDurationT = safenew
          NumericTextCtrl(NumericConverter::TIME,
-                        S.GetParent(),
-                        wxID_ANY,
-                        isSelection ? _("hh:mm:ss + samples") : _("hh:mm:ss + milliseconds"),
-                        duration,
-                        mProjectRate,
-                        wxDefaultPosition,
-                        wxDefaultSize,
-                        true);
+                         S.GetParent(),
+                         wxID_ANY,
+                         GetDurationFormat(),
+                         GetDuration(),
+                         mProjectRate,
+                         wxDefaultPosition,
+                         wxDefaultSize,
+                         true);
       mToneDurationT->SetName(_("Duration"));
       mToneDurationT->EnableMenu();
       S.AddWindow(mToneDurationT, wxALIGN_LEFT | wxALL);

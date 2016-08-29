@@ -11,14 +11,19 @@
 #ifndef _DIRMANAGER_
 #define _DIRMANAGER_
 
+#include "MemoryX.h"
 #include <wx/list.h>
 #include <wx/string.h>
 #include <wx/filename.h>
 #include <wx/hashmap.h>
+#include <wx/utils.h>
 
-#include "WaveTrack.h"
+#include "audacity/Types.h"
+#include "xml/XMLTagHandler.h"
+#include "wxFileNameWrapper.h"
 
 class wxHashTable;
+class BlockArray;
 class BlockFile;
 class SequenceTest;
 
@@ -27,24 +32,24 @@ class SequenceTest;
 #define FSCKstatus_SAVE_AUP  0x4 // used in combination with FSCKstatus_CHANGED
 
 WX_DECLARE_HASH_MAP(int, int, wxIntegerHash, wxIntegerEqual, DirHash);
-WX_DECLARE_HASH_MAP(wxString, BlockFile*, wxStringHash, wxStringEqual, BlockHash);
+
+class BlockFile;
+using BlockFilePtr = std::shared_ptr<BlockFile>;
+
+WX_DECLARE_HASH_MAP(wxString, std::weak_ptr<BlockFile>, wxStringHash,
+                    wxStringEqual, BlockHash);
 
 wxMemorySize GetFreeMemory();
 
-class DirManager: public XMLTagHandler {
+class PROFILE_DLL_API DirManager final : public XMLTagHandler {
  public:
 
-   // MM: Construct DirManager with refcount=1
+   // MM: Construct DirManager
    DirManager();
 
-   // MM: Only called by Deref() when refcount reaches zero.
    virtual ~DirManager();
 
-   static void SetTempDir(wxString _temp) { globaltemp = _temp; }
-
-   // MM: Ref count mechanism for the DirManager itself
-   void Ref();
-   void Deref();
+   static void SetTempDir(const wxString &_temp) { globaltemp = _temp; }
 
    // Returns true on success.
    // If SetProject is told NOT to create the directory
@@ -56,29 +61,33 @@ class DirManager: public XMLTagHandler {
 
    wxLongLong GetFreeDiskSpace();
 
-   BlockFile *NewSimpleBlockFile(samplePtr sampleData,
+   BlockFilePtr
+      NewSimpleBlockFile(samplePtr sampleData,
                                  sampleCount sampleLen,
                                  sampleFormat format,
                                  bool allowDeferredWrite = false);
 
-   BlockFile *NewAliasBlockFile( wxString aliasedFile, sampleCount aliasStart,
+   BlockFilePtr
+      NewAliasBlockFile( const wxString &aliasedFile, sampleCount aliasStart,
                                  sampleCount aliasLen, int aliasChannel);
 
-   BlockFile *NewODAliasBlockFile( wxString aliasedFile, sampleCount aliasStart,
+   BlockFilePtr
+      NewODAliasBlockFile( const wxString &aliasedFile, sampleCount aliasStart,
                                  sampleCount aliasLen, int aliasChannel);
 
-   BlockFile *NewODDecodeBlockFile( wxString aliasedFile, sampleCount aliasStart,
+   BlockFilePtr
+      NewODDecodeBlockFile( const wxString &aliasedFile, sampleCount aliasStart,
                                  sampleCount aliasLen, int aliasChannel, int decodeType);
 
    /// Returns true if the blockfile pointed to by b is contained by the DirManager
-   bool ContainsBlockFile(BlockFile *b) const;
+   bool ContainsBlockFile(const BlockFile *b) const;
    /// Check for existing using filename using complete filename
-   bool ContainsBlockFile(wxString filepath) const;
+   bool ContainsBlockFile(const wxString &filepath) const;
 
    // Adds one to the reference count of the block file,
-   // UNLESS it is "locked", then it makes a new copy of
+   // UNLESS it is "locked", then it makes a NEW copy of
    // the BlockFile.
-   BlockFile *CopyBlockFile(BlockFile *b);
+   BlockFilePtr CopyBlockFile(const BlockFilePtr &b);
 
    BlockFile *LoadBlockFile(const wxChar **attrs, sampleFormat format);
    void SaveBlockFile(BlockFile *f, int depth, FILE *fp);
@@ -91,22 +100,23 @@ class DirManager: public XMLTagHandler {
    bool MoveToNewProjectDirectory(BlockFile *f);
    bool CopyToNewProjectDirectory(BlockFile *f);
 
-   bool EnsureSafeFilename(wxFileName fName);
+   bool EnsureSafeFilename(const wxFileName &fName);
 
-   void Ref(BlockFile * f);
-   void Deref(BlockFile * f);
-
-   // For debugging only
-   int GetRefCount(BlockFile * f);
-
-   void SetLoadingTarget(BlockFile **target) { mLoadingTarget = target; }
+   void SetLoadingTarget(BlockArray *pArray, unsigned idx)
+   {
+      mLoadingTarget = pArray;
+      mLoadingTargetIdx = idx;
+   }
    void SetLoadingFormat(sampleFormat format) { mLoadingFormat = format; }
    void SetLoadingBlockLength(sampleCount len) { mLoadingBlockLen = len; }
-   void SetMaxSamples(sampleCount max) { mMaxSamples = max; }
+
+   // Note: following affects only the loading of block files when opening a project
+   void SetLoadingMaxSamples(sampleCount max) { mMaxSamples = max; }
+
    bool HandleXMLTag(const wxChar *tag, const wxChar **attrs);
    XMLTagHandler *HandleXMLChild(const wxChar * WXUNUSED(tag)) { return NULL; }
-   void WriteXML(XMLWriter & WXUNUSED(xmlFile)) { wxASSERT(false); }; // This class only reads tags.
-   bool AssignFile(wxFileName &filename,wxString value,bool check);
+   void WriteXML(XMLWriter & WXUNUSED(xmlFile)) { wxASSERT(false); } // This class only reads tags.
+   bool AssignFile(wxFileNameWrapper &filename, const wxString &value, bool check);
 
    // Clean the temp dir. Note that now where we have auto recovery the temp
    // dir is not cleaned at start up anymore. But it is cleaned when the
@@ -144,9 +154,9 @@ class DirManager: public XMLTagHandler {
    wxString GetDataFilesDir() const;
 
    // This should only be used by the auto save functionality
-   void SetLocalTempDir(wxString path);
+   void SetLocalTempDir(const wxString &path);
 
-   // Do not delete any temporary files on exit. This is only called if
+   // Do not DELETE any temporary files on exit. This is only called if
    // auto recovery is cancelled and should be retried later
    static void SetDontDeleteTempFiles() { dontDeleteTempFiles = true; }
 
@@ -158,21 +168,28 @@ class DirManager: public XMLTagHandler {
 
  private:
 
-   wxFileName MakeBlockFileName();
-   wxFileName MakeBlockFilePath(wxString value);
+   wxFileNameWrapper MakeBlockFileName();
+   wxFileNameWrapper MakeBlockFilePath(const wxString &value);
 
    bool MoveOrCopyToNewProjectDirectory(BlockFile *f, bool copy);
 
-   int mRef; // MM: Current refcount
-
    BlockHash mBlockFileHash; // repository for blockfiles
-   DirHash   dirTopPool;    // available toplevel dirs
-   DirHash   dirTopFull;    // full toplevel dirs
-   DirHash   dirMidPool;    // available two-level dirs
-   DirHash   dirMidFull;    // full two-level dirs
 
-   void BalanceInfoDel(wxString);
-   void BalanceInfoAdd(wxString);
+   // Hashes for management of the sub-directory tree of _data
+   struct BalanceInfo
+   {
+      DirHash   dirTopPool;    // available toplevel dirs
+      DirHash   dirTopFull;    // full toplevel dirs
+      DirHash   dirMidPool;    // available two-level dirs
+      DirHash   dirMidFull;    // full two-level dirs
+   } mBalanceInfo;
+
+   // Accessor for the balance info, may need to do a delayed update for
+   // deletion in case other threads DELETE block files
+   BalanceInfo &GetBalanceInfo();
+
+   void BalanceInfoDel(const wxString&);
+   void BalanceInfoAdd(const wxString&);
    void BalanceFileAdd(int);
    int BalanceMidAdd(int, int);
 
@@ -184,11 +201,14 @@ class DirManager: public XMLTagHandler {
 
    wxArrayString aliasList;
 
-   BlockFile **mLoadingTarget;
+   BlockArray *mLoadingTarget;
+   unsigned mLoadingTargetIdx;
    sampleFormat mLoadingFormat;
    sampleCount mLoadingBlockLen;
 
    sampleCount mMaxSamples; // max samples per block
+
+   unsigned long mLastBlockFileDestructionCount { 0 };
 
    static wxString globaltemp;
    wxString mytemp;

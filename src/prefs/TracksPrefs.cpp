@@ -18,18 +18,40 @@
 *//*******************************************************************/
 
 #include "../Audacity.h"
-
-#include <wx/defs.h>
-
-#include "../ShuttleGui.h"
-
 #include "TracksPrefs.h"
 
-////////////////////////////////////////////////////////////////////////////////
+#include <algorithm>
+#include <wx/defs.h>
+
+#include "../Experimental.h"
+#include "../Prefs.h"
+#include "../ShuttleGui.h"
+#include "../WaveTrack.h"
+
+#include "../Experimental.h"
+
+
+namespace {
+   const wxChar *PinnedHeadPreferenceKey()
+   {
+      return wxT("/AudioIO/PinnedHead");
+   }
+
+   bool PinnedHeadPreferenceDefault()
+   {
+      return false;
+   }
+}
+
 
 TracksPrefs::TracksPrefs(wxWindow * parent)
 :  PrefsPanel(parent, _("Tracks"))
 {
+   // Bugs 1043, 1044
+   // First rewrite legacy preferences
+   gPrefs->Write(wxT("/GUI/DefaultViewModeNew"),
+      (int) WaveTrack::FindDefaultViewMode());
+
    Populate();
 }
 
@@ -37,29 +59,34 @@ TracksPrefs::~TracksPrefs()
 {
 }
 
+const wxChar *TracksPrefs::ScrollingPreferenceKey()
+{
+   static auto string = wxT("/GUI/ScrollBeyondZero");
+   return string;
+}
+
 void TracksPrefs::Populate()
 {
-   mSoloCodes.Add(wxT("Standard"));
    mSoloCodes.Add(wxT("Simple"));
+   mSoloCodes.Add(wxT("Multi"));
    mSoloCodes.Add(wxT("None"));
 
-   mSoloChoices.Add(_("Standard"));
    mSoloChoices.Add(_("Simple"));
+   mSoloChoices.Add(_("Multi-track"));
    mSoloChoices.Add(_("None"));
 
 
-   // Keep the same order as in TrackPanel.cpp menu: OnWaveformID, OnWaveformDBID, OnSpectrumID, OnSpectrumLogID, OnPitchID
-   mViewCodes.Add(0);
-   mViewCodes.Add(1);
-   mViewCodes.Add(2);
-   mViewCodes.Add(3);
-   mViewCodes.Add(4);
+   // Keep view choices and codes in proper correspondence --
+   // we don't display them by increasing integer values.
 
    mViewChoices.Add(_("Waveform"));
+   mViewCodes.Add(int(WaveTrack::Waveform));
+
    mViewChoices.Add(_("Waveform (dB)"));
+   mViewCodes.Add(int(WaveTrack::obsoleteWaveformDBDisplay));
+
    mViewChoices.Add(_("Spectrogram"));
-   mViewChoices.Add(_("Spectrogram log(f)"));
-   mViewChoices.Add(_("Pitch (EAC)"));
+   mViewCodes.Add(WaveTrack::Spectrum);
 
    //------------------------- Main section --------------------
    // Now construct the GUI itself.
@@ -76,7 +103,10 @@ void TracksPrefs::PopulateOrExchange(ShuttleGui & S)
 
    S.StartStatic(_("Display"));
    {
-      S.TieCheckBox(_("&Update display while playing"),
+      S.TieCheckBox(_("&Pinned Recording/Playback head"),
+                    PinnedHeadPreferenceKey(),
+                    PinnedHeadPreferenceDefault());
+      S.TieCheckBox(_("&Update display when Recording/Playback head unpinned"),
                     wxT("/GUI/AutoScroll"),
                     true);
       S.TieCheckBox(_("Automatically &fit tracks vertically zoomed"),
@@ -87,14 +117,23 @@ void TracksPrefs::PopulateOrExchange(ShuttleGui & S)
 
       S.StartMultiColumn(2);
       {
-         S.TieChoice(_("Default &View Mode:"),
-                     wxT("/GUI/DefaultViewMode"),
+         S.TieChoice(_("Default &view mode:"),
+                     wxT("/GUI/DefaultViewModeNew"),
                      0,
                      mViewChoices,
                      mViewCodes);
          S.SetSizeHints(mViewChoices);
+
+         S.TieTextBox(_("Default audio track &name:"),
+                      wxT("/GUI/TrackNames/DefaultTrackName"),
+                      _("Audio Track"),
+                      30);
       }
       S.EndMultiColumn();
+
+      S.TieCheckBox(_("Sho&w audio track name as overlay"),
+                  wxT("/GUI/ShowTrackNameInWaveform"),
+                  false);
    }
    S.EndStatic();
 
@@ -116,6 +155,11 @@ void TracksPrefs::PopulateOrExchange(ShuttleGui & S)
       S.TieCheckBox(_("Editing a clip can &move other clips"),
                     wxT("/GUI/EditClipCanMove"),
                     true);
+#ifdef EXPERIMENTAL_SCROLLING_LIMITS
+      S.TieCheckBox(_("Enable scrolling left of &zero"),
+                    ScrollingPreferenceKey(),
+                    ScrollingPreferenceDefault());
+#endif
 
       S.AddSpace(10);
 
@@ -133,10 +177,29 @@ void TracksPrefs::PopulateOrExchange(ShuttleGui & S)
    S.EndStatic();
 }
 
+bool TracksPrefs::GetPinnedHeadPreference()
+{
+   return gPrefs->ReadBool(PinnedHeadPreferenceKey(), PinnedHeadPreferenceDefault());
+}
+
+void TracksPrefs::SetPinnedHeadPreference(bool value, bool flush)
+{
+   gPrefs->Write(PinnedHeadPreferenceKey(), value);
+   if(flush)
+      gPrefs->Flush();
+}
+
+
 bool TracksPrefs::Apply()
 {
    ShuttleGui S(this, eIsSavingToPrefs);
    PopulateOrExchange(S);
 
    return true;
+}
+
+PrefsPanel *TracksPrefsFactory::Create(wxWindow *parent)
+{
+   wxASSERT(parent); // to justify safenew
+   return safenew TracksPrefs(parent);
 }

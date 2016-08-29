@@ -20,6 +20,11 @@ the pitch without changing the tempo.
 #ifndef __AUDACITY_EFFECT_CHANGEPITCH__
 #define __AUDACITY_EFFECT_CHANGEPITCH__
 
+#if USE_SBSMS
+#include "SBSMSEffect.h"
+#include <wx/checkbox.h>
+#endif
+
 #include <wx/choice.h>
 #include <wx/event.h>
 #include <wx/slider.h>
@@ -27,13 +32,13 @@ the pitch without changing the tempo.
 #include <wx/string.h>
 #include <wx/textctrl.h>
 
-#include "../ShuttleGui.h"
-
 #include "SoundTouchEffect.h"
+
+class ShuttleGui;
 
 #define CHANGEPITCH_PLUGIN_SYMBOL XO("Change Pitch")
 
-class EffectChangePitch : public EffectSoundTouch
+class EffectChangePitch final : public EffectSoundTouch
 {
 public:
    EffectChangePitch();
@@ -41,43 +46,43 @@ public:
 
    // IdentInterface implementation
 
-   virtual wxString GetSymbol();
-   virtual wxString GetDescription();
+   wxString GetSymbol() override;
+   wxString GetDescription() override;
 
    // EffectIdentInterface implementation
 
-   virtual EffectType GetType();
+   EffectType GetType() override;
 
    // EffectClientInterface implementation
 
-   virtual bool GetAutomationParameters(EffectAutomationParameters & parms);
-   virtual bool SetAutomationParameters(EffectAutomationParameters & parms);
-   virtual bool LoadFactoryDefaults();
+   bool GetAutomationParameters(EffectAutomationParameters & parms) override;
+   bool SetAutomationParameters(EffectAutomationParameters & parms) override;
+   bool LoadFactoryDefaults() override;
 
    // Effect implementation
 
-   virtual bool Init();
-   virtual bool Process();
-   virtual bool CheckWhetherSkipEffect();
-   virtual void PopulateOrExchange(ShuttleGui & S);
-   virtual bool TransferDataToWindow();
-   virtual bool TransferDataFromWindow();
+   bool Init() override;
+   bool Process() override;
+   bool CheckWhetherSkipEffect() override;
+   void PopulateOrExchange(ShuttleGui & S) override;
+   bool TransferDataToWindow() override;
+   bool TransferDataFromWindow() override;
 
 private:
    // EffectChangePitch implementation
 
    // Deduce m_FromFrequency from the samples at the beginning of
    // the selection. Then set some other params accordingly.
-   virtual void DeduceFrequencies();
+   void DeduceFrequencies();
 
    // calculations
-   void Calc_ToPitch(); // Update m_nToPitch from new m_dSemitonesChange.
+   void Calc_ToPitch(); // Update m_nToPitch from NEW m_dSemitonesChange.
    void Calc_ToOctave();
    void Calc_SemitonesChange_fromPitches();
    void Calc_SemitonesChange_fromOctaveChange();
    void Calc_SemitonesChange_fromPercentChange();
    void Calc_ToFrequency(); // Update m_ToFrequency from m_FromFrequency & m_dPercentChange.
-   void Calc_PercentChange(); // Update m_dPercentChange based on new m_dSemitonesChange.
+   void Calc_PercentChange(); // Update m_dPercentChange based on NEW m_dSemitonesChange.
 
    // handlers
    void OnChoice_FromPitch(wxCommandEvent & evt);
@@ -108,6 +113,7 @@ private:
    void Update_Slider_PercentChange(); // Update control per current m_dPercentChange.
 
 private:
+   bool mUseSBSMS;
    // effect parameters
    int    m_nFromPitch;          // per PitchIndex()
    int    m_nFromOctave;         // per PitchOctave()
@@ -135,6 +141,10 @@ private:
    wxTextCtrl *   m_pTextCtrl_ToFrequency;
    wxTextCtrl *   m_pTextCtrl_PercentChange;
    wxSlider *     m_pSlider_PercentChange;
+
+#if USE_SBSMS
+   wxCheckBox *   mUseSBSMSCheckBox;
+#endif
 
    DECLARE_EVENT_TABLE();
 };

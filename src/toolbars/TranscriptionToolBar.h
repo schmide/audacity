@@ -14,11 +14,13 @@
 #define __AUDACITY_TRANSCRIPTION_TOOLBAR__
 
 #include "ToolBar.h"
+#include "../Experimental.h"
 
+#include "../MemoryX.h"
 #include <wx/brush.h>
 #include <wx/pen.h>
 
-#include "../Sequence.h"
+#include "audacity/Types.h"
 #include "../Theme.h"
 
 class wxBitmap;
@@ -32,33 +34,38 @@ class wxPen;
 class AButton;
 class ASlider;
 class TimeTrack;
-class VoiceKey;
 class WaveTrack;
 
+#ifdef EXPERIMENTAL_VOICE_DETECTION
+class VoiceKey;
 //TTB 0-8 are button-ids, which also correspond to their
 //position in mButtons.  9 & 10 are ids for sliders, which aren't
 //in the button array.
+#endif
+
 enum
-   {
-      TTB_PlaySpeed,
-      TTB_StartOn,
-      TTB_EndOn,
-      TTB_StartOff,
-      TTB_EndOff,
-      TTB_SelectSound,
-      TTB_SelectSilence,
-      TTB_AutomateSelection,
-      TTB_MakeLabel,
-      TTB_Calibrate,
+{
+   TTB_PlaySpeed,
+   TTB_PlaySpeedSlider,
 
-      TTB_SensitivitySlider,
-      TTB_PlaySpeedSlider,
-      TTB_KeyType
-   };
+#ifdef EXPERIMENTAL_VOICE_DETECTION
+   TTB_StartOn,
+   TTB_EndOn,
+   TTB_StartOff,
+   TTB_EndOff,
+   TTB_SelectSound,
+   TTB_SelectSilence,
+   TTB_AutomateSelection,
+   TTB_MakeLabel,
+   TTB_Calibrate,
+   TTB_SensitivitySlider,
+   TTB_KeyType,
+#endif
 
-#define TTBNumButtons 10
+   TTBNumButtons
+};
 
-class TranscriptionToolBar:public ToolBar {
+class TranscriptionToolBar final : public ToolBar {
 
  public:
 
@@ -67,30 +74,41 @@ class TranscriptionToolBar:public ToolBar {
 
    void Create(wxWindow *parent);
 
-   virtual void OnKeyEvent(wxKeyEvent & event);
-   virtual void OnPlaySpeed(wxCommandEvent & event);
-   virtual void OnSpeedSlider(wxCommandEvent & event);
-   virtual void OnStartOn(wxCommandEvent & event);
-   virtual void OnStartOff(wxCommandEvent & event);
-   virtual void OnEndOn(wxCommandEvent & event);
-   virtual void OnEndOff(wxCommandEvent & event);
-   virtual void OnSelectSound(wxCommandEvent & event);
-   virtual void OnSelectSilence(wxCommandEvent & event);
-   virtual void OnCalibrate(wxCommandEvent & event);
-   virtual void OnMakeLabel(wxCommandEvent & event);
-   virtual void OnAutomateSelection(wxCommandEvent & event);
-   virtual void OnSensitivitySlider(wxCommandEvent & event);
+   void OnKeyEvent(wxKeyEvent & event);
+   void OnPlaySpeed(wxCommandEvent & event);
+   void OnSpeedSlider(wxCommandEvent & event);
 
-   virtual void Populate();
-   virtual void Repaint(wxDC * WXUNUSED(dc)) {};
-   virtual void EnableDisableButtons();
-   virtual void UpdatePrefs();
+   void Populate() override;
+   void Repaint(wxDC * WXUNUSED(dc)) override {};
+   void EnableDisableButtons() override;
+   void UpdatePrefs() override;
 
    void OnFocus(wxFocusEvent &event);
    void OnCaptureKey(wxCommandEvent &event);
 
-   virtual double GetSensitivity();
-   virtual void SetKeyType(wxCommandEvent & event);
+#ifdef EXPERIMENTAL_VOICE_DETECTION
+   void OnStartOn(wxCommandEvent & event);
+   void OnStartOff(wxCommandEvent & event);
+   void OnEndOn(wxCommandEvent & event);
+   void OnEndOff(wxCommandEvent & event);
+   void OnSelectSound(wxCommandEvent & event);
+   void OnSelectSilence(wxCommandEvent & event);
+   void OnCalibrate(wxCommandEvent & event);
+   void OnMakeLabel(wxCommandEvent & event);
+   void OnAutomateSelection(wxCommandEvent & event);
+   void OnSensitivitySlider(wxCommandEvent & event);
+
+   //void Populate() override;
+   //void Repaint(wxDC * WXUNUSED(dc)) override {}
+   //void EnableDisableButtons() override;
+   //void UpdatePrefs() override;
+
+   //void OnFocus(wxFocusEvent &event);
+   //void OnCaptureKey(wxCommandEvent &event);
+
+   double GetSensitivity();
+   void SetKeyType(wxCommandEvent & event);
+#endif
 
    void PlayAtSpeed(bool looped, bool cutPreview);
    void ShowPlaySpeedDialog();
@@ -113,7 +131,7 @@ class TranscriptionToolBar:public ToolBar {
       int id, unsigned altIdx);
    void GetSamples(WaveTrack *t, sampleCount *s0, sampleCount *slen);
    void SetButton(bool newstate, AButton *button);
-   void RegenerateTooltips();
+   void RegenerateTooltips() override;
 
    AButton *mButtons[TTBNumButtons];
    wxImage *upImage;
@@ -123,16 +141,19 @@ class TranscriptionToolBar:public ToolBar {
    ASlider *mPlaySpeedSlider;
    double mPlaySpeed;
    ASlider *mSensitivitySlider;
+
+#ifdef EXPERIMENTAL_VOICE_DETECTION
    double mSensitivity;
-   VoiceKey *mVk;
+   std::unique_ptr<VoiceKey> mVk;
+   wxChoice *mKeyTypeChoice;
+#endif
 
    wxBrush mBackgroundBrush;
    wxPen mBackgroundPen;
    int mBackgroundWidth;
    int mBackgroundHeight;
 
-   TimeTrack *mTimeTrack;
-   wxChoice *mKeyTypeChoice;
+   std::unique_ptr<TimeTrack> mTimeTrack;
 
  public:
 
@@ -140,7 +161,5 @@ class TranscriptionToolBar:public ToolBar {
    DECLARE_EVENT_TABLE();
 };
 
-
-#define COMMAND_LINE_LOG_TRACE    TRUE
 #endif
 

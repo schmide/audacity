@@ -12,7 +12,7 @@
 \brief The SplashDialog shows help information for Audacity when
 Audacity starts up.
 
-It was written for the benefit of new users who do not want to
+It was written for the benefit of NEW users who do not want to
 read the manual.  The text of the dialog is kept short to increase the
 chance of it being read.  The content is designed to reduce the
 most commonly asked questions about Audacity.
@@ -51,20 +51,20 @@ enum
    DontShowID=1000,
 };
 
-BEGIN_EVENT_TABLE(SplashDialog, wxDialog)
+BEGIN_EVENT_TABLE(SplashDialog, wxDialogWrapper)
    EVT_BUTTON(wxID_OK, SplashDialog::OnOK)
    EVT_CHECKBOX( DontShowID, SplashDialog::OnDontShow )
 END_EVENT_TABLE()
 
-IMPLEMENT_CLASS(SplashDialog, wxDialog)
+IMPLEMENT_CLASS(SplashDialog, wxDialogWrapper)
 
 SplashDialog::SplashDialog(wxWindow * parent)
-   :  wxDialog(parent, -1, _("Welcome to Audacity!"),
+   :  wxDialogWrapper(parent, -1, _("Welcome to Audacity!"),
       wxPoint( -1, 60 ), // default x position, y position 60 pixels from top of screen.
       wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
 {
+   SetName(GetTitle());
    this->SetBackgroundColour(theTheme.Colour( clrAboutBoxBackground ));
-   m_pIcon = NULL;
    m_pLogo = NULL; //v
    ShuttleGui S( this, eIsCreating );
    Populate( S );
@@ -83,7 +83,7 @@ void SplashDialog::Populate( ShuttleGui & S )
    S.StartVerticalLay(1);
 
    //v For now, change to AudacityLogoWithName via old-fashioned ways, not Theme.
-   m_pLogo = new wxBitmap((const char **) AudacityLogoWithName_xpm); //v
+   m_pLogo = std::make_unique<wxBitmap>((const char **) AudacityLogoWithName_xpm); //v
 
    // JKC: Resize to 50% of size.  Later we may use a smaller xpm as
    // our source, but this allows us to tweak the size - if we want to.
@@ -93,16 +93,16 @@ void SplashDialog::Populate( ShuttleGui & S )
    // wxIMAGE_QUALITY_HIGH not supported by wxWidgets 2.6.1, or we would use it here.
    RescaledImage.Rescale( int(LOGOWITHNAME_WIDTH * fScale), int(LOGOWITHNAME_HEIGHT *fScale) );
    wxBitmap RescaledBitmap( RescaledImage );
-   m_pIcon =
-       new wxStaticBitmap(S.GetParent(), -1,
+   wxStaticBitmap *const icon =
+       safenew wxStaticBitmap(S.GetParent(), -1,
                           //*m_pLogo, //v theTheme.Bitmap(bmpAudacityLogoWithName),
                           RescaledBitmap,
                           wxDefaultPosition,
                           wxSize(int(LOGOWITHNAME_WIDTH*fScale), int(LOGOWITHNAME_HEIGHT*fScale)));
 
-   S.Prop(0).AddWindow( m_pIcon );
+   S.Prop(0).AddWindow( icon );
 
-   mpHtml = new LinkingHtmlWindow(S.GetParent(), -1,
+   mpHtml = safenew LinkingHtmlWindow(S.GetParent(), -1,
                                          wxDefaultPosition,
                                          wxSize(506, 280),
                                          wxHW_SCROLLBAR_AUTO | wxSUNKEN_BORDER );
@@ -113,7 +113,7 @@ void SplashDialog::Populate( ShuttleGui & S )
    {
       S.SetBorder( 5 );
       S.Id( DontShowID).AddCheckBox( _("Don't show this again at start up"), bShow ? wxT("false") : wxT("true") );
-      wxButton *ok = new wxButton(S.GetParent(), wxID_OK);
+      wxButton *ok = safenew wxButton(S.GetParent(), wxID_OK);
       ok->SetDefault();
       S.SetBorder( 5 );
       S.Prop(0).AddWindow( ok, wxALIGN_RIGHT| wxALL );
@@ -123,8 +123,6 @@ void SplashDialog::Populate( ShuttleGui & S )
 
 SplashDialog::~SplashDialog()
 {
-   delete m_pIcon;
-   delete m_pLogo;
 }
 
 void SplashDialog::OnDontShow( wxCommandEvent & Evt )
@@ -144,7 +142,9 @@ void SplashDialog::Show2( wxWindow * pParent )
 {
    if( pSelf == NULL )
    {
-      pSelf = new SplashDialog( pParent );
+      // pParent owns it
+      wxASSERT(pParent);
+      pSelf = safenew SplashDialog( pParent );
    }
    pSelf->mpHtml->SetPage(HelpText( wxT("welcome") ));
    pSelf->Show( true );

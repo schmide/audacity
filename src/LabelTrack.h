@@ -36,26 +36,24 @@ class TrackList;
 class AudacityProject;
 class DirManager;
 class TimeWarper;
+class ZoomInfo;
 
 
 class LabelStruct
 {
-   // disallow copy
-private:
-   LabelStruct(const LabelStruct&);
-   LabelStruct& operator= (const LabelStruct&);
 public:
    // Copies region
    LabelStruct(const SelectedRegion& region, const wxString &aTitle);
    // Copies region but then overwrites other times
    LabelStruct(const SelectedRegion& region, double t0, double t1,
                const wxString &aTitle);
-   void DrawLines( wxDC & dc, const wxRect & r);
-   void DrawGlyphs( wxDC & dc, const wxRect & r, int GlyphLeft, int GlyphRight);
-   void DrawText( wxDC & dc, const wxRect & r);
-   void DrawTextBox( wxDC & dc, const wxRect & r);
-   void DrawHighlight( wxDC & dc, int xPos1, int xPos2, int charHeight);
-   void getXPos( wxDC & dc, int * xPos1, int cursorPos);
+   void DrawLines( wxDC & dc, const wxRect & r) const;
+   void DrawGlyphs
+      ( wxDC & dc, const wxRect & r, int GlyphLeft, int GlyphRight) const;
+   void DrawText( wxDC & dc, const wxRect & r) const;
+   void DrawTextBox( wxDC & dc, const wxRect & r) const;
+   void DrawHighlight( wxDC & dc, int xPos1, int xPos2, int charHeight) const;
+   void getXPos( wxDC & dc, int * xPos1, int cursorPos) const;
    const SelectedRegion &getSelectedRegion() const { return selectedRegion; }
    double getDuration() const { return selectedRegion.duration(); }
    double getT0() const { return selectedRegion.t0(); }
@@ -63,6 +61,11 @@ public:
    // Returns true iff the label got inverted:
    bool AdjustEdge( int iEdge, double fNewTime);
    void MoveLabel( int iEdge, double fNewTime);
+
+   struct BadFormatException {};
+   static LabelStruct Import(wxTextFile &file, int &index);
+
+   void Export(wxTextFile &file) const;
 
    /// Relationships between selection region and labels
    enum TimeRelations
@@ -78,113 +81,115 @@ public:
    /// Returns relationship between a region described and this label; if
    /// parent is set, it will consider point labels at the very beginning
    /// and end of parent to be within a region that borders them (this makes
-   /// it possible to delete capture all labels with a Select All).
+   /// it possible to DELETE capture all labels with a Select All).
    TimeRelations RegionRelation(double reg_t0, double reg_t1,
-                                LabelTrack *parent = NULL);
+                                const LabelTrack *parent = NULL) const;
 
 public:
    SelectedRegion selectedRegion;
    wxString title; /// Text of the label.
-   int width; /// width of the text in pixels.
+   mutable int width; /// width of the text in pixels.
 
 // Working storage for on-screen layout.
-   int x;     /// Pixel position of left hand glyph
-   int x1;    /// Pixel position of right hand glyph
-   int xText; /// Pixel position of left hand side of text box
-   int y;     /// Pixel position of label.
+   mutable int x;     /// Pixel position of left hand glyph
+   mutable int x1;    /// Pixel position of right hand glyph
+   mutable int xText; /// Pixel position of left hand side of text box
+   mutable int y;     /// Pixel position of label.
 
-   bool highlighted;              /// if the text is highlighted
-   bool changeInitialMouseXPos;   /// flag to change initial mouse X pos
    bool updated;                  /// flag to tell if the label times were updated
 };
 
-//You can't stick AUDACITY_DLL_API in front of the WX_DEFINE_ARRAY() macro, you
-//have to use the below macro instead to avoid a warning
-WX_DEFINE_USER_EXPORTED_ARRAY(LabelStruct *, LabelArray, class AUDACITY_DLL_API);
+using LabelArray = std::vector<LabelStruct>;
 
 const int NUM_GLYPH_CONFIGS = 3;
 const int NUM_GLYPH_HIGHLIGHTS = 4;
 const int MAX_NUM_ROWS =80;
 
 
-class AUDACITY_DLL_API LabelTrack : public Track
+class AUDACITY_DLL_API LabelTrack final : public Track
 {
    friend class LabelStruct;
 
  public:
-   bool IsGoodLabelFirstKey(int keyCode);
-   bool IsGoodLabelEditKey(int keyCode);
+   bool IsGoodLabelFirstKey(const wxKeyEvent & evt);
+   bool IsGoodLabelEditKey(const wxKeyEvent & evt);
    bool IsTextSelected();
 
    void CreateCustomGlyphs();
-   LabelTrack(DirManager * projDirManager);
+   LabelTrack(const std::shared_ptr<DirManager> &projDirManager);
    LabelTrack(const LabelTrack &orig);
 
    virtual ~ LabelTrack();
-   virtual void SetOffset(double dOffset);
+   void SetOffset(double dOffset) override;
 
+   static const int DefaultFontSize = 12;
+
+   static wxFont GetFont(const wxString &faceName, int size = DefaultFontSize);
    static void ResetFont();
 
-   void Draw(wxDC & dc, const wxRect & r, double h, double pps,
-             double sel0, double sel1);
+   void Draw(wxDC & dc, const wxRect & r,
+             const SelectedRegion &selectedRegion,
+             const ZoomInfo &zoomInfo) const;
 
    int getSelectedIndex() const { return mSelIndex; }
+   bool IsAdjustingLabel() const { return mIsAdjustingLabel; }
 
-   virtual int GetKind() const { return Label; }
+   int GetKind() const override { return Label; }
 
-   virtual double GetStartTime();
-   virtual double GetEndTime();
+   double GetOffset() const override;
+   double GetStartTime() const override;
+   double GetEndTime() const override;
 
-   virtual Track *Duplicate() { return new LabelTrack(*this); }
+   using Holder = std::unique_ptr<LabelTrack>;
+   Track::Holder Duplicate() const override;
 
-   virtual bool HandleXMLTag(const wxChar *tag, const wxChar **attrs);
-   virtual XMLTagHandler *HandleXMLChild(const wxChar *tag);
-   virtual void WriteXML(XMLWriter &xmlFile);
+   void SetSelected(bool s) override;
+
+   bool HandleXMLTag(const wxChar *tag, const wxChar **attrs) override;
+   XMLTagHandler *HandleXMLChild(const wxChar *tag) override;
+   void WriteXML(XMLWriter &xmlFile) override;
 
 #if LEGACY_PROJECT_FILE_SUPPORT
-   virtual bool Load(wxTextFile * in, DirManager * dirManager);
-   virtual bool Save(wxTextFile * out, bool overwrite);
+   bool Load(wxTextFile * in, DirManager * dirManager) override;
+   bool Save(wxTextFile * out, bool overwrite) override;
 #endif
 
-   virtual bool Cut  (double t0, double t1, Track ** dest);
+   Track::Holder Cut  (double t0, double t1) override;
    // JKC Do not add the const modifier to Copy(), Clear()
    // or Paste() because then it
    // is no longer recognised as a virtual function matching the
    // one in Track.
-   virtual bool Copy (double t0, double t1, Track ** dest);// const;
-   virtual bool Clear(double t0, double t1);
-   virtual bool Paste(double t, Track * src);
+   Track::Holder Copy (double t0, double t1) const override;
+   bool Clear(double t0, double t1) override;
+   bool Paste(double t, const Track * src) override;
    bool Repeat(double t0, double t1, int n);
 
-   virtual bool Silence(double t0, double t1);
-   virtual bool InsertSilence(double t, double len);
+   bool Silence(double t0, double t1) override;
+   bool InsertSilence(double t, double len) override;
    int OverGlyph(int x, int y);
    static wxBitmap & GetGlyph( int i);
 
 
    void ResetFlags();
-   bool OverTextBox(const LabelStruct *pLabel, int x, int y);
+   int OverATextBox(int xx, int yy) const;
+   bool OverTextBox(const LabelStruct *pLabel, int x, int y) const;
    bool CutSelectedText();
    bool CopySelectedText();
    bool PasteSelectedText(double sel0, double sel1);
    static bool IsTextClipSupported();
 
-   // methods to set flags
-   void SetDragXPos(const int d) { mDragXPos = d; }
-   void SetInBox(bool inTextBox) { mInBox = inTextBox; }
-   void SetResetCursorPos(bool resetFlag) { mResetCursorPos = resetFlag; }
-   void SetWrongDragging(bool rightFlag) { mRightDragging = rightFlag; }
-   void SetDrawCursor(bool drawCursorFlag) { mDrawCursor = drawCursorFlag; }
-
-   bool HandleMouse(const wxMouseEvent & evt, wxRect & r, double h, double pps,
-                           SelectedRegion *newSel);
+   void HandleClick(const wxMouseEvent & evt, const wxRect & r, const ZoomInfo &zoomInfo,
+      SelectedRegion *newSel);
+   bool HandleGlyphDragRelease(const wxMouseEvent & evt, wxRect & r, const ZoomInfo &zoomInfo,
+      SelectedRegion *newSel);
+   void HandleTextDragRelease(const wxMouseEvent & evt);
 
    bool CaptureKey(wxKeyEvent & event);
    bool OnKeyDown(SelectedRegion &sel, wxKeyEvent & event);
    bool OnChar(SelectedRegion &sel, wxKeyEvent & event);
 
    void Import(wxTextFile & f);
-   void Export(wxTextFile & f);
+   void Export(wxTextFile & f) const;
 
    void Unselect();
 
@@ -194,24 +199,30 @@ class AUDACITY_DLL_API LabelTrack : public Track
    const LabelStruct *GetLabel(int index) const;
 
    //This returns the index of the label we just added.
-   int AddLabel(const SelectedRegion &region, const wxString &title = wxT(""));
+   int AddLabel(const SelectedRegion &region, const wxString &title = wxT(""),
+      int restoreFocus = -1);
    //And this tells us the index, if there is a label already there.
    int GetLabelIndex(double t, double t1);
 
    //This deletes the label at given index.
    void DeleteLabel(int index);
 
-   //get current cursor position
-   bool CalcCursorX(wxWindow * parent, int * x);
-   int getCurrentCursorPosition() const { return mCurrentCursorPos; }
+   //get current cursor position,
+   // relative to the left edge of the track panel
+   bool CalcCursorX(int * x) const;
+
+   void CalcHighlightXs(int *x1, int *x2) const;
 
    void MayAdjustLabel( int iLabel, int iEdge, bool bAllowSwapping, double fNewTime);
    void MayMoveLabel( int iLabel, int iEdge, double fNewTime);
 
    // This pastes labels without shifting existing ones
-   bool PasteOver(double t, Track *src);
-   bool SplitCut(double b, double e, Track **dest);
-   bool SplitDelete(double b, double e);
+   bool PasteOver(double t, const Track *src);
+
+   // PRL:  These functions were not used because they were not overrides!  Was that right?
+   //Track::Holder SplitCut(double b, double e) /* not override */;
+   //bool SplitDelete(double b, double e) /* not override */;
+
    void ShiftLabelsOnInsert(double length, double pt);
    void ChangeLabelsOnReverse(double b, double e);
    void ScaleLabels(double b, double e, double change);
@@ -219,7 +230,7 @@ class AUDACITY_DLL_API LabelTrack : public Track
    void WarpLabels(const TimeWarper &warper);
 
    // Returns tab-separated text of all labels completely within given region
-   wxString GetTextOfLabels(double t0, double t1);
+   wxString GetTextOfLabels(double t0, double t1) const;
 
  public:
    void SortLabels();
@@ -229,6 +240,8 @@ class AUDACITY_DLL_API LabelTrack : public Track
    //mOldEdge is useful for telling us when there has been a state change.
    int mOldEdge;
  private:
+   void ShowContextMenu();
+   void OnContextMenu(wxCommandEvent & evt);
 
    int mSelIndex;              /// Keeps track of the currently selected label
    int mMouseOverLabelLeft;    /// Keeps track of which left label the mouse is currently over.
@@ -242,28 +255,28 @@ class AUDACITY_DLL_API LabelTrack : public Track
    static bool mbGlyphsReady;
    static wxBitmap mBoundaryGlyphs[NUM_GLYPH_CONFIGS * NUM_GLYPH_HIGHLIGHTS];
 
-   int xUsed[MAX_NUM_ROWS];
-
    static int mFontHeight;
-   int mXPos1;                         /// left X pos of highlighted area
-   int mXPos2;                         /// right X pos of highlighted area
-   int mCurrentCursorPos;              /// current cursor position
-   int mInitialCursorPos;              /// initial cursor position
-   double mMouseXPos;                  /// mouse X pos
-   int mDragXPos;                      /// end X pos of dragging
-   bool mInBox;                        /// flag to tell if the mouse is in text box
-   bool mResetCursorPos;               /// flag to reset cursor position(used in the dragging the glygh)
-   bool mRightDragging;                /// flag to tell if it's a valid dragging
-   bool mDrawCursor;                   /// flag to tell if drawing the cursor or not
+   int mCurrentCursorPos;                      /// current cursor position
+   int mInitialCursorPos;                      /// initial cursor position
+
+   bool mRightDragging;                        /// flag to tell if it's a valid dragging
+   bool mDrawCursor;                           /// flag to tell if drawing the
+                                                  /// cursor or not
+   int mRestoreFocus;                          /// Restore focus to this track
+                                                  /// when done editing
 
    // Set in copied label tracks
    double mClipLen;
 
-   void ComputeLayout(const wxRect & r, double h, double pps);
-   void ComputeTextPosition(const wxRect & r, int index);
-   void SetCurrentCursorPosition(wxDC & dc, int xPos);
+   void ComputeLayout(const wxRect & r, const ZoomInfo &zoomInfo) const;
+   void ComputeTextPosition(const wxRect & r, int index) const;
 
-   void calculateFontHeight(wxDC & dc);
+public:
+   int FindCurrentCursorPosition(int xPos);
+   void SetCurrentCursorPosition(int xPos);
+
+private:
+   void calculateFontHeight(wxDC & dc) const;
    void RemoveSelectedText();
 
    bool mIsAdjustingLabel;

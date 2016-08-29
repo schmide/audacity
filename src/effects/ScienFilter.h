@@ -23,17 +23,19 @@ Vaughan Johnson (Preview)
 #include <wx/string.h>
 #include <wx/window.h>
 
-#include "../ShuttleGui.h"
 #include "../widgets/Ruler.h"
 #include "Biquad.h"
 
 #include "Effect.h"
 
+class wxTextCtrl;
+class ShuttleGui;
+
 #define CLASSICFILTERS_PLUGIN_SYMBOL XO("Classic Filters")
 
 class EffectScienFilterPanel;
 
-class EffectScienFilter : public Effect
+class EffectScienFilter final : public Effect
 {
 public:
    EffectScienFilter();
@@ -41,35 +43,35 @@ public:
 
    // IdentInterface implementation
 
-   virtual wxString GetSymbol();
-   virtual wxString GetDescription();
+   wxString GetSymbol() override;
+   wxString GetDescription() override;
 
    // EffectIdentInterface implementation
 
-   virtual EffectType GetType();
+   EffectType GetType() override;
 
    // EffectClientInterface implementation
 
-   virtual int GetAudioInCount();
-   virtual int GetAudioOutCount();
-   virtual bool ProcessInitialize(sampleCount totalLen, ChannelNames chanMap = NULL);
-   virtual sampleCount ProcessBlock(float **inBlock, float **outBlock, sampleCount blockLen);
-   virtual bool GetAutomationParameters(EffectAutomationParameters & parms);
-   virtual bool SetAutomationParameters(EffectAutomationParameters & parms);
+   int GetAudioInCount() override;
+   int GetAudioOutCount() override;
+   bool ProcessInitialize(sampleCount totalLen, ChannelNames chanMap = NULL) override;
+   sampleCount ProcessBlock(float **inBlock, float **outBlock, sampleCount blockLen) override;
+   bool GetAutomationParameters(EffectAutomationParameters & parms) override;
+   bool SetAutomationParameters(EffectAutomationParameters & parms) override;
 
    // Effect implementation
 
-   virtual bool Startup();
-   virtual bool Init();
-   virtual void PopulateOrExchange(ShuttleGui & S);
-   virtual bool TransferDataToWindow();
-   virtual bool TransferDataFromWindow();
+   bool Startup() override;
+   bool Init() override;
+   void PopulateOrExchange(ShuttleGui & S) override;
+   bool TransferDataToWindow() override;
+   bool TransferDataFromWindow() override;
 
 private:
    // EffectScienFilter implementation
 
-   virtual bool TransferGraphLimitsFromWindow();
-   virtual bool CalcFilter();
+   bool TransferGraphLimitsFromWindow();
+   bool CalcFilter();
    double ChebyPoly (int Order, double NormFreq);
    float FilterMagnAtFreq(float Freq);
 
@@ -133,7 +135,7 @@ private:
    friend class EffectScienFilterPanel;
 };
 
-class EffectScienFilterPanel : public wxPanel
+class EffectScienFilterPanel final : public wxPanelWrapper
 {
 public:
    EffectScienFilterPanel(EffectScienFilter *effect, wxWindow *parent);
@@ -141,6 +143,8 @@ public:
 
    // We don't need or want to accept focus.
    bool AcceptsFocus() const;
+   // So that wxPanel is not included in Tab traversal - see wxWidgets bug 15581
+   bool AcceptsFocusFromKeyboard() const;
 
    void SetFreqRange(double lo, double hi);
    void SetDbRange(double min, double max);
@@ -159,7 +163,7 @@ private:
    double mDbMin;
    double mDbMax;
 
-   wxBitmap *mBitmap;
+   std::unique_ptr<wxBitmap> mBitmap;
    wxRect mEnvRect;
    int mWidth;
    int mHeight;

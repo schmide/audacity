@@ -15,6 +15,7 @@
 *//*******************************************************************/
 
 #include "../Audacity.h"
+#include "TranscriptionToolBar.h"
 
 // For compilers that support precompilation, includes "wx/wx.h".
 #include <wx/wxprec.h>
@@ -28,7 +29,6 @@
 #endif // WX_PRECOMP
 
 #include "../Envelope.h"
-#include "TranscriptionToolBar.h"
 
 #include "ControlToolBar.h"
 #include "../AudacityApp.h"
@@ -38,10 +38,13 @@
 #include "../ImageManipulation.h"
 #include "../Project.h"
 #include "../TimeTrack.h"
-#include "../VoiceKey.h"
 #include "../WaveTrack.h"
 #include "../widgets/AButton.h"
 #include "../widgets/ASlider.h"
+
+#ifdef EXPERIMENTAL_VOICE_DETECTION
+#include "../VoiceKey.h"
+#endif
 
 IMPLEMENT_CLASS(TranscriptionToolBar, ToolBar);
 
@@ -52,9 +55,13 @@ IMPLEMENT_CLASS(TranscriptionToolBar, ToolBar);
 
 BEGIN_EVENT_TABLE(TranscriptionToolBar, ToolBar)
    EVT_CHAR(TranscriptionToolBar::OnKeyEvent)
+   EVT_COMMAND(wxID_ANY, EVT_CAPTURE_KEY, TranscriptionToolBar::OnCaptureKey)
+
    EVT_COMMAND_RANGE(TTB_PlaySpeed, TTB_PlaySpeed,
                      wxEVT_COMMAND_BUTTON_CLICKED, TranscriptionToolBar::OnPlaySpeed)
    EVT_SLIDER(TTB_PlaySpeedSlider, TranscriptionToolBar::OnSpeedSlider)
+
+#ifdef EXPERIMENTAL_VOICE_DETECTION
    EVT_COMMAND_RANGE(TTB_StartOn, TTB_StartOn,
                      wxEVT_COMMAND_BUTTON_CLICKED, TranscriptionToolBar::OnStartOn)
    EVT_COMMAND_RANGE(TTB_StartOff, TTB_StartOff,
@@ -76,7 +83,7 @@ BEGIN_EVENT_TABLE(TranscriptionToolBar, ToolBar)
    EVT_SLIDER(TTB_SensitivitySlider, TranscriptionToolBar::OnSensitivitySlider)
 
    EVT_CHOICE(TTB_KeyType, TranscriptionToolBar::SetKeyType)
-   EVT_COMMAND(wxID_ANY, EVT_CAPTURE_KEY, TranscriptionToolBar::OnCaptureKey)
+#endif
 END_EVENT_TABLE()
    ;   //semicolon enforces  proper automatic indenting in emacs.
 
@@ -85,21 +92,13 @@ TranscriptionToolBar::TranscriptionToolBar()
 : ToolBar(TranscriptionBarID, _("Transcription"), wxT("Transcription"))
 {
    mPlaySpeed = 1.0 * 100.0;
-   mTimeTrack = NULL;
 #ifdef EXPERIMENTAL_VOICE_DETECTION
-   mVk = new VoiceKey();
+   mVk = std::make_unique<VoiceKey>();
 #endif
 }
 
 TranscriptionToolBar::~TranscriptionToolBar()
 {
-#ifdef EXPERIMENTAL_VOICE_DETECTION
-   delete mVk;
-#endif
-   if (mTimeTrack) {
-      delete mTimeTrack;
-      mTimeTrack = NULL;
-   }
 }
 
 void TranscriptionToolBar::Create(wxWindow * parent)
@@ -145,7 +144,7 @@ AButton *TranscriptionToolBar::AddButton(
 {
    AButton *&r = mButtons[id];
 
-   r = ToolBar::MakeButton(
+   r = ToolBar::MakeButton(this,
       bmpRecoloredUpSmall, bmpRecoloredDownSmall, bmpRecoloredHiliteSmall,
       eFore, eFore, eDisabled,
       wxWindowID(id),
@@ -186,7 +185,7 @@ void TranscriptionToolBar::Populate()
 
    //Add a slider that controls the speed of playback.
    const int SliderWidth=100;
-   mPlaySpeedSlider = new ASlider(this,
+   mPlaySpeedSlider = safenew ASlider(this,
                                   TTB_PlaySpeedSlider,
                                   _("Playback Speed"),
                                   wxDefaultPosition,
@@ -229,7 +228,7 @@ void TranscriptionToolBar::Populate()
    AddButton(bmpTnCalibrate, bmpTnCalibrateDisabled, TTB_Calibrate,
       TRANSLATABLE("Calibrate voicekey"));
 
-   mSensitivitySlider = new ASlider(this,
+   mSensitivitySlider = safenew ASlider(this,
                                     TTB_SensitivitySlider,
                                     TRANSLATABLE("Adjust Sensitivity"),
                                     wxDefaultPosition,
@@ -248,7 +247,7 @@ void TranscriptionToolBar::Populate()
       TRANSLATABLE("Direction Changes (High Threshold)")
    };
 
-   mKeyTypeChoice = new wxChoice(this, TTB_KeyType,
+   mKeyTypeChoice = safenew wxChoice(this, TTB_KeyType,
                                  wxDefaultPosition,
                                  wxDefaultSize,
                                  5,
@@ -264,6 +263,25 @@ void TranscriptionToolBar::Populate()
    UpdatePrefs();
 }
 
+void TranscriptionToolBar::EnableDisableButtons()
+{
+#ifdef EXPERIMENTAL_VOICE_DETECTION
+   AudacityProject *p = GetActiveProject();
+   if (!p) return;
+   // Is anything selected?
+   bool selection = false;
+   TrackListIterator iter(p->GetTracks());
+   for (Track *t = iter.First(); t; t = iter.Next())
+      if (t->GetSelected()) {
+         selection = true;
+         break;
+      }
+   selection &= (p->GetSel0() < p->GetSel1());
+
+   mButtons[TTB_Calibrate]->SetEnabled(selection);
+#endif
+}
+
 void TranscriptionToolBar::UpdatePrefs()
 {
    RegenerateTooltips();
@@ -277,9 +295,25 @@ void TranscriptionToolBar::UpdatePrefs()
 
 void TranscriptionToolBar::RegenerateTooltips()
 {
-#if wxUSE_TOOLTIPS
-   mButtons[TTB_PlaySpeed]->SetToolTip(_("Play-at-speed"));
-   mPlaySpeedSlider->SetToolTip(_("Playback Speed"));
+   // We could also mention the shift- and ctrl-modified versions in the
+   // tool tip... but it would get long
+
+   static const struct Entry {
+      int tool;
+      wxString commandName;
+      wxString untranslatedLabel;
+   } table[] = {
+      { TTB_PlaySpeed,   wxT("PlayAtSpeed"),    XO("Play-at-speed")  },
+   };
+
+   std::vector<wxString> commands;
+   for (const auto &entry : table) {
+      commands.clear();
+      commands.push_back(wxGetTranslation(entry.untranslatedLabel));
+      commands.push_back(entry.commandName);
+      ToolBar::SetButtonToolTip(*mButtons[entry.tool], commands);
+   }
+
 
 #ifdef EXPERIMENTAL_VOICE_DETECTION
    mButtons[TTB_StartOn]->SetToolTip(TRANSLATABLE("Left-to-On"));
@@ -295,18 +329,16 @@ void TranscriptionToolBar::RegenerateTooltips()
    mSensitivitySlider->SetToolTip(TRANSLATABLE("Sensitivity"));
    mKeyTypeChoice->SetToolTip(TRANSLATABLE("Key type"));
 #endif
-#endif
 }
 
 void TranscriptionToolBar::OnFocus(wxFocusEvent &event)
 {
-   wxCommandEvent e(EVT_CAPTURE_KEYBOARD);
-
    if (event.GetEventType() == wxEVT_KILL_FOCUS) {
-      e.SetEventType(EVT_RELEASE_KEYBOARD);
+      AudacityProject::ReleaseKeyboard(this);
    }
-   e.SetEventObject(this);
-   GetParent()->GetEventHandler()->ProcessEvent(e);
+   else {
+      AudacityProject::CaptureKeyboard(this);
+   }
 
    Refresh(false);
 
@@ -377,8 +409,8 @@ void TranscriptionToolBar::GetSamples(WaveTrack *t, sampleCount *s0, sampleCount
    double start = p->GetSel0();
    double end = p->GetSel1();
 
-   sampleCount ss0 = sampleCount( (start - t->GetOffset()) * t->GetRate() );
-   sampleCount ss1 = sampleCount( (end - t->GetOffset()) * t->GetRate() );
+   auto ss0 = sampleCount( (start - t->GetOffset()) * t->GetRate() );
+   auto ss1 = sampleCount( (end - t->GetOffset()) * t->GetRate() );
 
    if (start < t->GetOffset()) {
       ss0 = 0;
@@ -410,7 +442,7 @@ void TranscriptionToolBar::PlayAtSpeed(bool looped, bool cutPreview)
 
    // Create a TimeTrack if we haven't done so already
    if (!mTimeTrack) {
-      mTimeTrack = new TimeTrack(p->GetDirManager());
+      mTimeTrack = p->GetTrackFactory()->NewTimeTrack();
       if (!mTimeTrack) {
          return;
       }
@@ -441,27 +473,35 @@ void TranscriptionToolBar::PlayAtSpeed(bool looped, bool cutPreview)
 #endif
       AudioIOStartStreamOptions options(p->GetDefaultPlayOptions());
       options.playLooped = looped;
-      options.timeTrack = mTimeTrack;
+      options.timeTrack = mTimeTrack.get();
+      ControlToolBar::PlayAppearance appearance =
+         cutPreview ? ControlToolBar::PlayAppearance::CutPreview
+         : looped ? ControlToolBar::PlayAppearance::Looped
+         : ControlToolBar::PlayAppearance::Straight;
       p->GetControlToolBar()->PlayPlayRegion
          (SelectedRegion(playRegionStart, playRegionEnd),
           options,
-          cutPreview);
+          PlayMode::normalPlay,
+          appearance);
    }
 }
 
 // Come here from button clicks only
 void TranscriptionToolBar::OnPlaySpeed(wxCommandEvent & WXUNUSED(event))
 {
+   auto button = mButtons[TTB_PlaySpeed];
+
    // Let control have precedence over shift
    const bool cutPreview = mButtons[TTB_PlaySpeed]->WasControlDown();
    const bool looped = !cutPreview &&
-      mButtons[TTB_PlaySpeed]->WasShiftDown();
+      button->WasShiftDown();
    PlayAtSpeed(looped, cutPreview);
 }
 
 void TranscriptionToolBar::OnSpeedSlider(wxCommandEvent& WXUNUSED(event))
 {
    mPlaySpeed = (mPlaySpeedSlider->Get()) * 100;
+   RegenerateTooltips();
 
    // If IO is busy, abort immediately
    // AWD: This is disabled to work around a hang on Linux when PulseAudio is
@@ -471,6 +511,7 @@ void TranscriptionToolBar::OnSpeedSlider(wxCommandEvent& WXUNUSED(event))
    //}
 }
 
+#ifdef EXPERIMENTAL_VOICE_DETECTION
 void TranscriptionToolBar::OnStartOn(wxCommandEvent & WXUNUSED(event))
 {
    //If IO is busy, abort immediately
@@ -494,7 +535,7 @@ void TranscriptionToolBar::OnStartOn(wxCommandEvent & WXUNUSED(event))
       //if(len == 0)
       //len = (WaveTrack*)t->GetSequence()->GetNumSamples()-start;
 
-      sampleCount newstart = mVk->OnForward(*(WaveTrack*)t,start,len);
+      auto newstart = mVk->OnForward(*(WaveTrack*)t,start,len);
       double newpos = newstart / ((WaveTrack*)t)->GetRate();
 
       p->SetSel0(newpos);
@@ -527,7 +568,7 @@ void TranscriptionToolBar::OnStartOff(wxCommandEvent & WXUNUSED(event))
       //if(len == 0)
       //len = (WaveTrack*)t->GetSequence()->GetNumSamples()-start;
 
-      sampleCount newstart = mVk->OffForward(*(WaveTrack*)t,start,len);
+      auto newstart = mVk->OffForward(*(WaveTrack*)t,start,len);
       double newpos = newstart / ((WaveTrack*)t)->GetRate();
 
       p->SetSel0(newpos);
@@ -562,7 +603,7 @@ void TranscriptionToolBar::OnEndOn(wxCommandEvent & WXUNUSED(event))
             len = start;
             start = 0;
          }
-      sampleCount newEnd = mVk->OnBackward(*(WaveTrack*)t,start+ len,len);
+      auto newEnd = mVk->OnBackward(*(WaveTrack*)t,start+ len,len);
       double newpos = newEnd / ((WaveTrack*)t)->GetRate();
 
       p->SetSel1(newpos);
@@ -597,7 +638,7 @@ void TranscriptionToolBar::OnEndOff(wxCommandEvent & WXUNUSED(event))
          len = start;
          start = 0;
       }
-      sampleCount newEnd = mVk->OffBackward(*(WaveTrack*)t,start+ len,len);
+      auto newEnd = mVk->OffBackward(*(WaveTrack*)t,start+ len,len);
       double newpos = newEnd / ((WaveTrack*)t)->GetRate();
 
       p->SetSel1(newpos);
@@ -637,8 +678,8 @@ void TranscriptionToolBar::OnSelectSound(wxCommandEvent & WXUNUSED(event))
          //len = (WaveTrack*)t->GetSequence()->GetNumSamples()-start;
 
          double rate =  ((WaveTrack*)t)->GetRate();
-         sampleCount newstart = mVk->OffBackward(*(WaveTrack*)t,start,start);
-         sampleCount newend   = mVk->OffForward(*(WaveTrack*)t,start+len,(int)(tl->GetEndTime()*rate));
+         auto newstart = mVk->OffBackward(*(WaveTrack*)t,start,start);
+         auto newend   = mVk->OffForward(*(WaveTrack*)t,start+len,(int)(tl->GetEndTime()*rate));
 
          //reset the selection bounds.
          p->SetSel0(newstart / rate);
@@ -676,8 +717,8 @@ void TranscriptionToolBar::OnSelectSilence(wxCommandEvent & WXUNUSED(event))
          //if(len == 0)
          //len = (WaveTrack*)t->GetSequence()->GetNumSamples()-start;
          double rate =  ((WaveTrack*)t)->GetRate();
-         sampleCount newstart = mVk->OnBackward(*(WaveTrack*)t,start,start);
-         sampleCount newend   = mVk->OnForward(*(WaveTrack*)t,start+len,(int)(tl->GetEndTime()*rate));
+         auto newstart = mVk->OnBackward(*(WaveTrack*)t,start,start);
+         auto newend   = mVk->OnForward(*(WaveTrack*)t,start+len,(int)(tl->GetEndTime()*rate));
 
          //reset the selection bounds.
          p->SetSel0(newstart /  rate);
@@ -772,7 +813,6 @@ void TranscriptionToolBar::OnAutomateSelection(wxCommandEvent & WXUNUSED(event))
                start = 0;
             }
          int lastlen = 0;
-         sampleCount newStart, newEnd;
          double newStartPos, newEndPos;
 
 
@@ -786,13 +826,13 @@ void TranscriptionToolBar::OnAutomateSelection(wxCommandEvent & WXUNUSED(event))
 
                lastlen = len;
 
-               newStart = mVk->OnForward(*(WaveTrack*)t,start,len);
+               auto newStart = mVk->OnForward(*(WaveTrack*)t,start,len);
 
                //JKC: If no start found then don't add any labels.
                if( newStart==start)
                   break;
 
-               //Adjust len by the new start position
+               //Adjust len by the NEW start position
                len -= (newStart - start);
 
                //Adjust len by the minimum word size
@@ -800,10 +840,10 @@ void TranscriptionToolBar::OnAutomateSelection(wxCommandEvent & WXUNUSED(event))
 
 
 
-               //OK, now we have found a new starting point.  A 'word' should be at least
+               //OK, now we have found a NEW starting point.  A 'word' should be at least
                //50 ms long, so jump ahead minWordSize
 
-               newEnd   = mVk->OffForward(*(WaveTrack*)t,newStart+minWordSize, len);
+               auto newEnd   = mVk->OffForward(*(WaveTrack*)t,newStart+minWordSize, len);
 
                //If newEnd didn't move, we should give up, because
                // there isn't another end before the end of the selection.
@@ -811,7 +851,7 @@ void TranscriptionToolBar::OnAutomateSelection(wxCommandEvent & WXUNUSED(event))
                   break;
 
 
-               //Adjust len by the new word end
+               //Adjust len by the NEW word end
                len -= (newEnd - newStart);
 
                //Calculate the start and end of the words, in seconds
@@ -847,26 +887,6 @@ void TranscriptionToolBar::OnSensitivitySlider(wxCommandEvent & WXUNUSED(event))
    mSensitivity = (mSensitivitySlider->Get());
 }
 
-void TranscriptionToolBar::EnableDisableButtons()
-{
-
-#ifdef EXPERIMENTAL_VOICE_DETECTION
-   AudacityProject *p = GetActiveProject();
-   if (!p) return;
-   // Is anything selected?
-   bool selection = false;
-   TrackListIterator iter(p->GetTracks());
-   for (Track *t = iter.First(); t; t = iter.Next())
-      if (t->GetSelected()) {
-         selection = true;
-         break;
-      }
-   selection &= (p->GetSel0() < p->GetSel1());
-
-   mButtons[TTB_Calibrate]->SetEnabled(selection);
-#endif
-}
-
 void TranscriptionToolBar::SetKeyType(wxCommandEvent & WXUNUSED(event))
 {
    int value = mKeyTypeChoice->GetSelection();
@@ -892,6 +912,7 @@ void TranscriptionToolBar::SetKeyType(wxCommandEvent & WXUNUSED(event))
       }
 
 }
+#endif
 
 void TranscriptionToolBar::ShowPlaySpeedDialog()
 {

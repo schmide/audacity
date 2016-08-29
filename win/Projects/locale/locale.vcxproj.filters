@@ -27,9 +27,6 @@
     <msgfmt Include="..\..\..\locale\ca.po">
       <Filter>Source Files</Filter>
     </msgfmt>
-    <msgfmt Include="..\..\..\locale\ca%40valencia.po">
-      <Filter>Source Files</Filter>
-    </msgfmt>
     <msgfmt Include="..\..\..\locale\cs.po">
       <Filter>Source Files</Filter>
     </msgfmt>
@@ -120,9 +117,6 @@
     <msgfmt Include="..\..\..\locale\pl.po">
       <Filter>Source Files</Filter>
     </msgfmt>
-    <msgfmt Include="..\..\..\locale\pt.po">
-      <Filter>Source Files</Filter>
-    </msgfmt>
     <msgfmt Include="..\..\..\locale\pt_BR.po">
       <Filter>Source Files</Filter>
     </msgfmt>
@@ -162,11 +156,22 @@
     <msgfmt Include="..\..\..\locale\vi.po">
       <Filter>Source Files</Filter>
     </msgfmt>
-    <msgfmt Include="..\..\..\locale\zh.po">
-      <Filter>Source Files</Filter>
-    </msgfmt>
     <msgfmt Include="..\..\..\locale\zh_TW.po">
       <Filter>Source Files</Filter>
     </msgfmt>
+    <msgfmt Include="..\..\..\locale\ca_ES%40valencia.po">
+      <Filter>Source Files</Filter>
+    </msgfmt>
+    <msgfmt Include="..\..\..\locale\pt_PT.po">
+      <Filter>Source Files</Filter>
+    </msgfmt>
+    <msgfmt Include="..\..\..\locale\zh_CN.po">
+      <Filter>Source Files</Filter>
+    </msgfmt>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\..\locale\audacity.pot">
+      <Filter>Source Files</Filter>
+    </None>
   </ItemGroup>
 </Project>

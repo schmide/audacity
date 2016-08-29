@@ -13,6 +13,8 @@
 
 **********************************************************************/
 
+#include "RawAudioGuess.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,7 +24,6 @@
 #include <wx/ffile.h>
 
 #include "../Internat.h"
-#include "RawAudioGuess.h"
 
 #define RAW_GUESS_DEBUG 0
 
@@ -714,7 +715,7 @@ static int Guess16Bit(int numTests, char **rawData,
       float signL, signR, unsignL, unsignR;
       int i;
 
-      /* Extract a new array of the MSBs only: */
+      /* Extract a NEW array of the MSBs only: */
 
       for (i = 0; i < dataSize / 2; i++)
          rawData2[i] = rawData[test][2 * i + (evenMSB ? 0 : 1)];
@@ -765,7 +766,7 @@ static int Guess16Bit(int numTests, char **rawData,
       float leftChannel, rightChannel, combinedChannel;
       int i;
 
-      /* Extract a new array of the MSBs only: */
+      /* Extract a NEW array of the MSBs only: */
 
       for (i = 0; i < dataSize / 2; i++)
          rawData2[i] = rawData[test][2 * i + (evenMSB ? 0 : 1)];
@@ -806,7 +807,7 @@ static int Guess16Bit(int numTests, char **rawData,
          float redundant;
          int i;
 
-         /* Extract a new array of the MSBs only: */
+         /* Extract a NEW array of the MSBs only: */
 
          for (i = 0; i < dataSize / 2; i++)
             rawData2[i] = rawData[test][2 * i + (evenMSB ? 0 : 1)];
@@ -858,7 +859,7 @@ static int Guess16Bit(int numTests, char **rawData,
       float former, latter;
       int i, offs;
 
-      /* Extract a new array of the MSBs only: */
+      /* Extract a NEW array of the MSBs only: */
 
       if (guessStereo)
          for (i = 0; i < (dataSize/4)-1; i++)
@@ -1066,8 +1067,10 @@ int RawAudioGuess(const wxString &in_fname,
    *out_channels = 1;
 
    wxFFile in_wxFFile(in_fname, wxT("rb"));
+
+   // JKC FALSE changed to -1.
    if (!in_wxFFile.IsOpened())
-      return false;
+      return -1;
    inf = in_wxFFile.fp();
 
    if (!inf) {
@@ -1079,6 +1082,7 @@ int RawAudioGuess(const wxString &in_fname,
       return -1;
    }
 
+   // FIXME: TRAP_ERR fseek return in RawAudioGuess unchecked.
    fseek(inf, 0, SEEK_END);
    fileLen = ftell(inf);
 
@@ -1100,6 +1104,7 @@ int RawAudioGuess(const wxString &in_fname,
       /* Make it a multiple of 16 (stereo double-precision) */
       startPoint = (startPoint/16)*16;
 
+      // FIXME: TRAP_ERR fseek return in MultiFormatReader unchecked.
       fseek(inf, headerSkipSize + startPoint, SEEK_SET);
       read_data = fread(rawData[test], 1, dataSize, inf);
       if (read_data != dataSize && ferror(inf)) {

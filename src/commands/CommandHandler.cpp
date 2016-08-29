@@ -16,34 +16,36 @@
 
 *//*******************************************************************/
 
-#include <wx/event.h>
+#include "../Audacity.h"
 #include "CommandHandler.h"
+#include <wx/event.h>
 #include "../Project.h"
 #include "Command.h"
 #include "AppCommandEvent.h"
 #include "ScriptCommandRelay.h"
 
 CommandHandler::CommandHandler(AudacityApp &app)
- : mCurrentContext(new CommandExecutionContext(&app, GetActiveProject()))
+ : mCurrentContext(std::make_unique<CommandExecutionContext>
+                   (&app, GetActiveProject()))
 { }
 
 CommandHandler::~CommandHandler()
 {
-   delete mCurrentContext;
 }
 
-void CommandHandler::SetProject(AudacityProject *proj)
+void CommandHandler::SetProject(AudacityProject *)
 {
-   mCurrentContext->proj = proj;
+   // TODO:  Review if the extend command handling is ever utilized
+   // mCurrentContext->proj = proj;
 }
 
 void CommandHandler::OnReceiveCommand(AppCommandEvent &event)
 {
    // First retrieve the actual command from the event 'envelope'.
-   Command *cmd = event.GetCommand();
+   CommandHolder cmd = event.GetCommand();
 
    // JKC: In case the user changed the project, let us track that.
-   // This saves us the embarrassment (crash) of a new project
+   // This saves us the embarrassment (crash) of a NEW project
    // being opened, the old one closed and still trying to act
    // on the old one.
    SetProject( GetActiveProject() );
@@ -52,9 +54,6 @@ void CommandHandler::OnReceiveCommand(AppCommandEvent &event)
    // different project.
    cmd->Apply(*mCurrentContext);
 
-   // Done with the command so delete it.
-   delete cmd;
-
    // Redraw the project
-   mCurrentContext->proj->RedrawProject();
+   mCurrentContext->GetProject()->RedrawProject();
 }

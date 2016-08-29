@@ -17,41 +17,32 @@ Also acts as a factory.
 
 *//*******************************************************************/
 
-#include "CommandMisc.h"
+#include "../Audacity.h"
 #include "CommandType.h"
+#include "CommandMisc.h"
 #include "CommandSignature.h"
 #include <wx/string.h>
 
 CommandType::CommandType()
-   : mName(NULL), mSignature(NULL)
+   : mName{}, mSignature{}
 { }
 
 CommandType::~CommandType()
 {
-   if (mName != NULL)
-   {
-      delete mName;
-   }
-   if (mSignature != NULL)
-   {
-      delete mSignature;
-   }
 }
 
-wxString CommandType::GetName()
+const wxString &CommandType::GetName()
 {
-   if (mName == NULL)
-   {
-      mName = new wxString(BuildName());
-   }
-   return *mName;
+   if (mName.empty())
+      mName = BuildName();
+   return mName;
 }
 
 CommandSignature &CommandType::GetSignature()
 {
-   if (mSignature == NULL)
+   if (!mSignature)
    {
-      mSignature = new CommandSignature();
+      mSignature.create();
       BuildSignature(*mSignature);
    }
    return *mSignature;

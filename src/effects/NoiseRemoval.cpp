@@ -50,6 +50,7 @@
 #include "../Prefs.h"
 #include "../Project.h"
 #include "../FileNames.h"
+#include "../ShuttleGui.h"
 
 #include <math.h>
 
@@ -153,9 +154,9 @@ bool EffectNoiseRemoval::CheckWhetherSkipEffect()
    return (mLevel == 0);
 }
 
-bool EffectNoiseRemoval::PromptUser()
+bool EffectNoiseRemoval::PromptUser(wxWindow *parent)
 {
-   NoiseRemovalDialog dlog(this, mParent);
+   NoiseRemovalDialog dlog(this, parent);
    dlog.mSensitivity = mSensitivity;
    dlog.mGain = -mNoiseGain;
    dlog.mFreq = mFreqSmoothingHz;
@@ -211,7 +212,7 @@ bool EffectNoiseRemoval::Process()
    this->CopyInputTracks(); // Set up mOutputTracks.
    bool bGoodResult = true;
 
-   SelectedTrackListOfKindIterator iter(Track::Wave, mOutputTracks);
+   SelectedTrackListOfKindIterator iter(Track::Wave, mOutputTracks.get());
    WaveTrack *track = (WaveTrack *) iter.First();
    int count = 0;
    while (track) {
@@ -221,9 +222,9 @@ bool EffectNoiseRemoval::Process()
       double t1 = mT1 > trackEnd? trackEnd: mT1;
 
       if (t1 > t0) {
-         sampleCount start = track->TimeToLongSamples(t0);
-         sampleCount end = track->TimeToLongSamples(t1);
-         sampleCount len = (sampleCount)(end - start);
+         auto start = track->TimeToLongSamples(t0);
+         auto end = track->TimeToLongSamples(t1);
+         auto len = end - start;
 
          if (!ProcessOne(count, track, start, len)) {
             Cleanup();
@@ -275,10 +276,8 @@ void EffectNoiseRemoval::Initialize()
    mFreqSmoothingBins = (int)(mFreqSmoothingHz * mWindowSize / mSampleRate);
    mAttackDecayBlocks = 1 +
       (int)(mAttackDecayTime * mSampleRate / (mWindowSize / 2));
-   // Applies to amplitudes, divide by 20:
-   mNoiseAttenFactor = pow(10.0, mNoiseGain/20.0);
-   // Applies to gain factors which apply to amplitudes, divide by 20:
-   mOneBlockAttackDecay = pow(10.0, (mNoiseGain / (20.0 * mAttackDecayBlocks)));
+   mNoiseAttenFactor = DB_TO_LINEAR(mNoiseGain);
+   mOneBlockAttackDecay = DB_TO_LINEAR(mNoiseGain / mAttackDecayBlocks);
    // Applies to power, divide by 10:
    mSensitivityFactor = pow(10.0, mSensitivity/10.0);
    mMinSignalBlocks =
@@ -435,7 +434,7 @@ void EffectNoiseRemoval::RotateHistoryWindows()
       mImagFFTs[i] = mImagFFTs[i-1];
    }
 
-   // Reuse the last buffers as the new first window
+   // Reuse the last buffers as the NEW first window
    mSpectrums[0] = lastSpectrum;
    mGains[0] = lastGain;
    mRealFFTs[0] = lastRealFFT;
@@ -448,7 +447,7 @@ void EffectNoiseRemoval::FinishTrack()
    // windows until we've output exactly as many samples as
    // were input.
    // Well, not exactly, but not more than mWindowSize/2 extra samples at the end.
-   // We'll delete them later in ProcessOne.
+   // We'll DELETE them later in ProcessOne.
 
    float *empty = new float[mWindowSize / 2];
    int i;
@@ -573,19 +572,18 @@ bool EffectNoiseRemoval::ProcessOne(int count, WaveTrack * track,
       mOutputTrack = mFactory->NewWaveTrack(track->GetSampleFormat(),
                                             track->GetRate());
 
-   sampleCount bufferSize = track->GetMaxBlockSize();
+   auto bufferSize = track->GetMaxBlockSize();
    float *buffer = new float[bufferSize];
 
    bool bLoopSuccess = true;
-   sampleCount blockSize;
-   sampleCount samplePos = start;
+   auto samplePos = start;
    while (samplePos < start + len) {
       //Get a blockSize of samples (smaller than the size of the buffer)
-      blockSize = track->GetBestBlockSize(samplePos);
-
       //Adjust the block size if it is the final block in the track
-      if (samplePos + blockSize > start + len)
-         blockSize = start + len - samplePos;
+      const auto blockSize = limitSampleBufferSize(
+         track->GetBestBlockSize(samplePos),
+         start + len - samplePos
+      );
 
       //Get the samples from the track and put them in the buffer
       track->Get((samplePtr)buffer, floatSample, samplePos, blockSize);
@@ -616,13 +614,12 @@ bool EffectNoiseRemoval::ProcessOne(int count, WaveTrack * track,
          double tLen = mOutputTrack->LongSamplesToTime(len);
          // Filtering effects always end up with more data than they started with.  Delete this 'tail'.
          mOutputTrack->HandleClear(tLen, mOutputTrack->GetEndTime(), false, false);
-         bool bResult = track->ClearAndPaste(t0, t0 + tLen, mOutputTrack, true, false);
+         bool bResult = track->ClearAndPaste(t0, t0 + tLen, mOutputTrack.get(), true, false);
          wxASSERT(bResult); // TO DO: Actually handle this.
       }
 
       // Delete the outputTrack now that its data is inserted in place
-      delete mOutputTrack;
-      mOutputTrack = NULL;
+      mOutputTrack.reset();
    }
 
    return bLoopSuccess;
@@ -664,7 +661,7 @@ enum {
 #define TIME_MAX 100    // Corresponds to 1.000 seconds
 
 
-BEGIN_EVENT_TABLE(NoiseRemovalDialog,wxDialog)
+BEGIN_EVENT_TABLE(NoiseRemovalDialog,wxDialogWrapper)
    EVT_BUTTON(wxID_OK, NoiseRemovalDialog::OnRemoveNoise)
    EVT_BUTTON(wxID_CANCEL, NoiseRemovalDialog::OnCancel)
    EVT_BUTTON(ID_EFFECT_PREVIEW, NoiseRemovalDialog::OnPreview)
@@ -682,8 +679,8 @@ BEGIN_EVENT_TABLE(NoiseRemovalDialog,wxDialog)
 END_EVENT_TABLE()
 
 NoiseRemovalDialog::NoiseRemovalDialog(EffectNoiseRemoval * effect,
-                                       wxWindow *parent) :
-   EffectDialog( parent, _("Noise Removal"), PROCESS_EFFECT)
+                                       wxWindow *parent)
+   : EffectDialog( parent, _("Noise Removal"), EffectTypeProcess)
 {
    m_pEffect = effect;
 

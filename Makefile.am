@@ -2,7 +2,7 @@ SUBDIRS = help images lib-src po src tests
 
 ACLOCAL_AMFLAGS = -I m4
 
-bin_SCRIPTS = audacity$(EXEEXT)
+bin_PROGRAMS = audacity$(EXEEXT)
 
 dist_doc_DATA = LICENSE.txt README.txt
 dist_pkgdata_DATA = presets/EQDefaultCurves.xml
@@ -62,10 +62,12 @@ nobase_dist_pkgdata_DATA = \
    plug-ins/beat.ny \
    plug-ins/clicktrack.ny \
    plug-ins/clipfix.ny \
+   plug-ins/crossfadeclips.ny \
    plug-ins/crossfadetracks.ny \
    plug-ins/delay.ny \
    plug-ins/equalabel.ny \
    plug-ins/highpass.ny \
+   plug-ins/limiter.ny \
    plug-ins/lowpass.ny \
    plug-ins/notch.ny \
    plug-ins/pluck.ny \
@@ -73,9 +75,13 @@ nobase_dist_pkgdata_DATA = \
    plug-ins/sample-data-export.ny \
    plug-ins/SilenceMarker.ny \
    plug-ins/SoundFinder.ny \
+   plug-ins/SpectralEditMulti.ny \
+   plug-ins/SpectralEditParametricEQ.ny \
+   plug-ins/SpectralEditShelves.ny \
    plug-ins/StudioFadeOut.ny \
    plug-ins/tremolo.ny \
    plug-ins/vocalremover.ny \
+   plug-ins/vocalrediso.ny \
    plug-ins/vocoder.ny \
    $(NULL)
 

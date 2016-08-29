@@ -16,9 +16,11 @@
 
 *//*******************************************************************/
 
+#include "../Audacity.h"
 #include "SelectCommand.h"
 #include <wx/string.h>
 #include "../Project.h"
+#include "../Track.h"
 
 wxString SelectCommandType::BuildName()
 {
@@ -27,30 +29,30 @@ wxString SelectCommandType::BuildName()
 
 void SelectCommandType::BuildSignature(CommandSignature &signature)
 {
-   OptionValidator *modeValidator = new OptionValidator();
+   auto modeValidator = make_movable<OptionValidator>();
    modeValidator->AddOption(wxT("None"));
    modeValidator->AddOption(wxT("All"));
    modeValidator->AddOption(wxT("Range"));
    modeValidator->AddOption(wxT("Name"));
-   signature.AddParameter(wxT("Mode"), wxT("All"), modeValidator);
+   signature.AddParameter(wxT("Mode"), wxT("All"), std::move(modeValidator));
 
-   DoubleValidator *startTimeValidator = new DoubleValidator();
-   signature.AddParameter(wxT("StartTime"), 0.0, startTimeValidator);
-   DoubleValidator *endTimeValidator = new DoubleValidator();
-   signature.AddParameter(wxT("EndTime"), 0.0, endTimeValidator);
-   IntValidator *firstTrackValidator = new IntValidator();
+   auto startTimeValidator = make_movable<DoubleValidator>();
+   signature.AddParameter(wxT("StartTime"), 0.0, std::move(startTimeValidator));
+   auto endTimeValidator = make_movable<DoubleValidator>();
+   signature.AddParameter(wxT("EndTime"), 0.0, std::move(endTimeValidator));
 
-   signature.AddParameter(wxT("FirstTrack"), 0, firstTrackValidator);
-   IntValidator *lastTrackValidator = new IntValidator();
-   signature.AddParameter(wxT("LastTrack"), 0, lastTrackValidator);
+   auto firstTrackValidator = make_movable<IntValidator>();
+   signature.AddParameter(wxT("FirstTrack"), 0, std::move(firstTrackValidator));
+   auto lastTrackValidator = make_movable<IntValidator>();
+   signature.AddParameter(wxT("LastTrack"), 0, std::move(lastTrackValidator));
 
-   Validator *trackNameValidator = new Validator();
-   signature.AddParameter(wxT("TrackName"), 0, trackNameValidator);
+   auto trackNameValidator = make_movable<DefaultValidator>();
+   signature.AddParameter(wxT("TrackName"), 0, std::move(trackNameValidator));
 }
 
-Command *SelectCommandType::Create(CommandOutputTarget *target)
+CommandHolder SelectCommandType::Create(std::unique_ptr<CommandOutputTarget> &&target)
 {
-   return new SelectCommand(*this, target);
+   return std::make_shared<SelectCommand>(*this, std::move(target));
 }
 
 bool SelectCommand::Apply(CommandExecutionContext context)
@@ -59,12 +61,12 @@ bool SelectCommand::Apply(CommandExecutionContext context)
    if (mode.IsSameAs(wxT("None")))
    {
       // select none
-      context.proj->OnSelectNone();
+      context.GetProject()->OnSelectNone();
    }
    else if (mode.IsSameAs(wxT("All")))
    {
       // select all
-      context.proj->OnSelectAll();
+      context.GetProject()->OnSelectAll();
    }
    else if (mode.IsSameAs(wxT("Range")))
    {
@@ -72,14 +74,14 @@ bool SelectCommand::Apply(CommandExecutionContext context)
       double t0 = GetDouble(wxT("StartTime"));
       double t1 = GetDouble(wxT("EndTime"));
 
-      TrackList *tracks = context.proj->GetTracks();
+      TrackList *tracks = context.GetProject()->GetTracks();
 
-      if (t0 < context.proj->GetTracks()->GetMinOffset())
+      if (t0 < context.GetProject()->GetTracks()->GetMinOffset())
       {
          Error(wxT("Start time is before start of track!"));
          return false;
       }
-      if (t1 > context.proj->GetTracks()->GetEndTime())
+      if (t1 > context.GetProject()->GetTracks()->GetEndTime())
       {
          Error(wxT("End time is after end of track!"));
          return false;
@@ -90,9 +92,9 @@ bool SelectCommand::Apply(CommandExecutionContext context)
       // defaulted, as in the second branch?
       // Or should this command take more parameters?
 #if 1
-      context.proj->mViewInfo.selectedRegion.setTimes(t0, t1);
+      context.GetProject()->mViewInfo.selectedRegion.setTimes(t0, t1);
 #else
-      context.proj->mViewInfo.selectedRegion = SelectedRegion(t0, t1);
+      context.GetProject()->mViewInfo.selectedRegion = SelectedRegion(t0, t1);
 #endif
 
       // select specified tracks
@@ -128,7 +130,7 @@ bool SelectCommand::Apply(CommandExecutionContext context)
    else if (mode.IsSameAs(wxT("Name")))
    {
       wxString name = GetString(wxT("TrackName"));
-      TrackList *tracks = context.proj->GetTracks();
+      TrackList *tracks = context.GetProject()->GetTracks();
       TrackListIterator iter(tracks);
       Track *t = iter.First();
       while (t) {

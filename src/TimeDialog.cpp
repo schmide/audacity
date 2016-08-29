@@ -25,7 +25,7 @@
 #include "ShuttleGui.h"
 #include "TimeDialog.h"
 
-BEGIN_EVENT_TABLE(TimeDialog, wxDialog)
+BEGIN_EVENT_TABLE(TimeDialog, wxDialogWrapper)
    EVT_COMMAND(wxID_ANY, EVT_TIMETEXTCTRL_UPDATED, TimeDialog::OnUpdate)
 END_EVENT_TABLE()
 
@@ -35,13 +35,14 @@ TimeDialog::TimeDialog(wxWindow *parent,
                        double rate,
                        double time,
                        const wxString &prompt)
-:  wxDialog(parent, wxID_ANY, title),
+:  wxDialogWrapper(parent, wxID_ANY, title),
    mPrompt(prompt),
    mFormat(format),
    mRate(rate),
    mTime(time),
    mTimeCtrl(NULL)
 {
+   SetName(GetTitle());
    ShuttleGui S(this, eIsCreating);
    PopulateOrExchange(S);
 }
@@ -53,7 +54,7 @@ void TimeDialog::PopulateOrExchange(ShuttleGui &S)
    {
       S.StartStatic(mPrompt, true);
       {
-         mTimeCtrl = new
+         mTimeCtrl = safenew
             NumericTextCtrl(
                NumericConverter::TIME, this,
                          wxID_ANY,
@@ -102,7 +103,7 @@ const double TimeDialog::GetTimeValue()
    return mTime;
 }
 
-void TimeDialog::SetFormatString(wxString formatString)
+void TimeDialog::SetFormatString(const wxString &formatString)
 {
    mFormat = formatString;
    TransferDataToWindow();

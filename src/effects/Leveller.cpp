@@ -14,6 +14,7 @@
 *//*******************************************************************/
 
 #include "../Audacity.h"
+#include "Leveller.h"
 
 #include <math.h>
 
@@ -22,8 +23,7 @@
 #include <wx/valgen.h>
 
 #include "../Prefs.h"
-
-#include "Leveller.h"
+#include "../ShuttleGui.h"
 
 enum kPasses
 {
@@ -80,7 +80,7 @@ wxString EffectLeveller::GetSymbol()
 
 wxString EffectLeveller::GetDescription()
 {
-   return XO("Leveler is a simple, combined compressor and limiter effect for reducing the dynamic range of audio");
+   return XO("A simple, combined compressor and limiter effect for reducing the dynamic range of audio");
 }
 
 // EffectIdentInterface implementation
@@ -107,7 +107,7 @@ sampleCount EffectLeveller::ProcessBlock(float **inBlock, float **outBlock, samp
    float *ibuf = inBlock[0];
    float *obuf = outBlock[0];
    
-   for (sampleCount i = 0; i < blockLen; i++)
+   for (decltype(blockLen) i = 0; i < blockLen; i++)
    {
       float frame = ibuf[i];
       for (int pass = 0; pass < mNumPasses; pass++)

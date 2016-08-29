@@ -14,25 +14,49 @@
 
 *//*******************************************************************/
 
+#include "../../Audacity.h"
+
+#if USE_AUDIO_UNITS
+
 #include <wx/defs.h>
 #include <wx/button.h>
 #include <wx/control.h>
 #include <wx/dir.h>
+
+#ifdef __WXMAC__
+#include <wx/evtloop.h>
+#endif
+
 #include <wx/filename.h>
 #include <wx/frame.h>
 #include <wx/listctrl.h>
-#include <wx/panel.h>
 #include <wx/sizer.h>
 #include <wx/settings.h>
+#include <wx/stattext.h>
 #include <wx/textctrl.h>
 #include <wx/tokenzr.h>
-#include <wx/mac/private.h>
 
+#include "../../ShuttleGui.h"
 #include "../../widgets/valnum.h"
-
+#include "../../widgets/wxPanelWrapper.h"
 
 #include "AudioUnitEffect.h"
-#include "AudioUnitCocoaHelper.h"
+
+struct CFReleaser
+   { void operator () (const void *p) const { if (p) CFRelease(p); } };
+template <typename T>
+   using CFunique_ptr = std::unique_ptr<T, CFReleaser>;
+
+struct AudioUnitParameterInfoEx : AudioUnitParameterInfo
+{
+   ~AudioUnitParameterInfoEx ()
+   {
+      if ((flags & kAudioUnitParameterFlag_HasCFNameString)
+          &&
+          (flags & kAudioUnitParameterFlag_CFNameRelease))
+         CFRelease( cfNameString );
+   }
+};
 
 // ============================================================================
 // Module registration entry point
@@ -46,7 +70,8 @@
 DECLARE_MODULE_ENTRY(AudacityModule)
 {
    // Create and register the importer
-   return new AudioUnitEffectsModule(moduleManager, path);
+   // Trust the module manager not to leak this
+   return safenew AudioUnitEffectsModule(moduleManager, path);
 }
 
 // ============================================================================
@@ -148,7 +173,7 @@ wxArrayString AudioUnitEffectsModule::FindPlugins(PluginManagerInterface & pm)
 bool AudioUnitEffectsModule::RegisterPlugin(PluginManagerInterface & pm, const wxString & path)
 {
    wxString name;
-   Component component = FindAudioUnit(path, name);
+   AudioComponent component = FindAudioUnit(path, name);
    if (component == NULL)
    {
       return false;
@@ -173,23 +198,23 @@ bool AudioUnitEffectsModule::IsPluginValid(const wxString & path)
 
 IdentInterface *AudioUnitEffectsModule::CreateInstance(const wxString & path)
 {
+   // Acquires a resource for the application.
    wxString name;
-   Component component = FindAudioUnit(path, name);
+   AudioComponent component = FindAudioUnit(path, name);
    if (component == NULL)
    {
       return NULL;
    }
 
-   return new AudioUnitEffect(path, name, component);
+   // Safety of this depends on complementary calls to DeleteInstance on the module manager side.
+   return safenew AudioUnitEffect(path, name, component);
 }
 
 void AudioUnitEffectsModule::DeleteInstance(IdentInterface *instance)
 {
-   AudioUnitEffect *effect = dynamic_cast<AudioUnitEffect *>(instance);
-   if (effect)
-   {
-      delete effect;
-   }
+   std::unique_ptr < AudioUnitEffect > {
+      dynamic_cast<AudioUnitEffect *>(instance)
+   };
 }
 
 // ============================================================================
@@ -199,8 +224,8 @@ void AudioUnitEffectsModule::DeleteInstance(IdentInterface *instance)
 void AudioUnitEffectsModule::LoadAudioUnitsOfType(OSType inAUType,
                                                   wxArrayString & effects)
 {
-   ComponentDescription desc;
-   Component component;
+   AudioComponentDescription desc;
+   AudioComponent component;
 
    desc.componentType = inAUType;
    desc.componentSubType = 0;
@@ -208,34 +233,41 @@ void AudioUnitEffectsModule::LoadAudioUnitsOfType(OSType inAUType,
    desc.componentFlags = 0;
    desc.componentFlagsMask = 0;
 
-   component = FindNextComponent(NULL, &desc);
+   component = AudioComponentFindNext(NULL, &desc);
    while (component != NULL)
    {
-      ComponentDescription found;
-      Handle nameHandle = NewHandle(0);
-      GetComponentInfo(component, &found, nameHandle, 0, 0);
-      HLock(nameHandle);
-      int len = ((const char *)(*nameHandle))[0];
-      wxString name(((const char *)(*nameHandle)+1), wxConvISO8859_1, len);
-      HUnlock(nameHandle);
-      DisposeHandle(nameHandle);
+      OSStatus result;
+      AudioComponentDescription found;
 
-      effects.Add(wxString::Format(wxT("%-4.4s/%-4.4s/%-4.4s/%s"),
-                  FromOSType(found.componentManufacturer).c_str(),
-                  FromOSType(found.componentType).c_str(),
-                  FromOSType(found.componentSubType).c_str(),
-                  name.c_str()));
+      result = AudioComponentGetDescription(component, &found);
+      if (result == noErr)
+      {
+         CFStringRef cfName;
+         result = AudioComponentCopyName(component, &cfName);
+         CFunique_ptr<const __CFString> uName{ cfName };
 
-      component = FindNextComponent (component, &desc);
+         if (result == noErr)
+         {
+            wxString name = wxCFStringRef::AsString(cfName);
+      
+            effects.Add(wxString::Format(wxT("%-4.4s/%-4.4s/%-4.4s/%s"),
+                        FromOSType(found.componentManufacturer).c_str(),
+                        FromOSType(found.componentType).c_str(),
+                        FromOSType(found.componentSubType).c_str(),
+                        name.c_str()));
+         }
+      }
+
+      component = AudioComponentFindNext(component, &desc);
    }
 }
 
-Component AudioUnitEffectsModule::FindAudioUnit(const wxString & path,
-                                                wxString & name)
+AudioComponent AudioUnitEffectsModule::FindAudioUnit(const wxString & path,
+                                                     wxString & name)
 {
    wxStringTokenizer tokens(path, wxT("/"));
 
-   ComponentDescription desc;
+   AudioComponentDescription desc;
 
    desc.componentManufacturer = ToOSType(tokens.GetNextToken());
    desc.componentType = ToOSType(tokens.GetNextToken());
@@ -245,7 +277,7 @@ Component AudioUnitEffectsModule::FindAudioUnit(const wxString & path,
 
    name = tokens.GetNextToken();
 
-   return FindNextComponent(NULL, &desc);
+   return AudioComponentFindNext(NULL, &desc);
 }
 
 wxString AudioUnitEffectsModule::FromOSType(OSType type)
@@ -276,7 +308,7 @@ OSType AudioUnitEffectsModule::ToOSType(const wxString & type)
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-class AudioUnitEffectOptionsDialog:public wxDialog
+class AudioUnitEffectOptionsDialog final : public wxDialogWrapper
 {
 public:
    AudioUnitEffectOptionsDialog(wxWindow * parent, EffectHostInterface *host);
@@ -288,23 +320,32 @@ public:
 
 private:
    EffectHostInterface *mHost;
+
    bool mUseLatency;
-   bool mUseGUI;
+   wxString mUIType;
+
+   wxArrayString mUITypes;
 
    DECLARE_EVENT_TABLE()
 };
 
-BEGIN_EVENT_TABLE(AudioUnitEffectOptionsDialog, wxDialog)
+BEGIN_EVENT_TABLE(AudioUnitEffectOptionsDialog, wxDialogWrapper)
    EVT_BUTTON(wxID_OK, AudioUnitEffectOptionsDialog::OnOk)
 END_EVENT_TABLE()
 
 AudioUnitEffectOptionsDialog::AudioUnitEffectOptionsDialog(wxWindow * parent, EffectHostInterface *host)
-:  wxDialog(parent, wxID_ANY, wxString(_("Audio Unit Effect Options")))
+:  wxDialogWrapper(parent, wxID_ANY, wxString(_("Audio Unit Effect Options")))
 {
    mHost = host;
 
+   mUITypes.Add(_("Full"));
+   mUITypes.Add(_("Generic"));
+   mUITypes.Add(_("Basic"));
+
    mHost->GetSharedConfig(wxT("Options"), wxT("UseLatency"), mUseLatency, true);
-   mHost->GetSharedConfig(wxT("Options"), wxT("UseGUI"), mUseGUI, true);
+   mHost->GetSharedConfig(wxT("Options"), wxT("UIType"), mUIType, wxT("Full"));
+
+   mUIType = wxGetTranslation(mUIType);
 
    ShuttleGui S(this, eIsCreating);
    PopulateOrExchange(S);
@@ -316,6 +357,7 @@ AudioUnitEffectOptionsDialog::~AudioUnitEffectOptionsDialog()
 
 void AudioUnitEffectOptionsDialog::PopulateOrExchange(ShuttleGui & S)
 {
+   
    S.SetBorder(5);
    S.StartHorizontalLay(wxEXPAND, 1);
    {
@@ -339,14 +381,21 @@ void AudioUnitEffectOptionsDialog::PopulateOrExchange(ShuttleGui & S)
          }
          S.EndStatic();
 
-         S.StartStatic(_("Graphical Mode"));
+         S.StartStatic(_("User Interface"));
          {
             S.AddVariableText(wxString() +
-               _("Most Audio Unit effects have a graphical interface for setting parameter values.") +
-               _(" A basic text-only method is also available. ") +
+               _("Select \"Full\" to use the graphical interface if supplied by the Audio Unit.") +
+               _(" Select \"Generic\" to use the system supplied generic interface.") +
+               _(" Select \"Basic\" for A basic text-only interface. ") +
                _(" Reopen the effect for this to take effect."))->Wrap(650);
-            S.TieCheckBox(_("Enable &graphical interface"),
-                          mUseGUI);
+
+            S.StartHorizontalLay(wxALIGN_LEFT);
+            {
+               S.TieChoice(_("Select &interface"),
+                           mUIType,
+                           &mUITypes);
+            }
+            S.EndHorizontalLay();
          }
          S.EndStatic();
       }
@@ -371,8 +420,21 @@ void AudioUnitEffectOptionsDialog::OnOk(wxCommandEvent & WXUNUSED(evt))
    ShuttleGui S(this, eIsGettingFromDialog);
    PopulateOrExchange(S);
 
+   if (mUIType == _("Full"))
+   {
+      mUIType = wxT("Full");
+   }
+   else if (mUIType == _("Generic"))
+   {
+      mUIType = wxT("Generic");
+   }
+   else if (mUIType == _("Basic"))
+   {
+      mUIType = wxT("Basic");
+   }
+
    mHost->SetSharedConfig(wxT("Options"), wxT("UseLatency"), mUseLatency);
-   mHost->SetSharedConfig(wxT("Options"), wxT("UseGUI"), mUseGUI);
+   mHost->SetSharedConfig(wxT("Options"), wxT("UIType"), mUIType);
 
    EndModal(wxID_OK);
 }
@@ -386,7 +448,7 @@ void AudioUnitEffectOptionsDialog::OnOk(wxCommandEvent & WXUNUSED(evt))
 #define PRESET_LOCAL_PATH wxT("/Library/Audio/Presets")
 #define PRESET_USER_PATH wxT("~/Library/Audio/Presets")
 
-class AudioUnitEffectExportDialog:public wxDialog
+class AudioUnitEffectExportDialog final : public wxDialogWrapper
 {
 public:
    AudioUnitEffectExportDialog(wxWindow * parent, AudioUnitEffect *effect);
@@ -405,12 +467,12 @@ private:
    DECLARE_EVENT_TABLE()
 };
 
-BEGIN_EVENT_TABLE(AudioUnitEffectExportDialog, wxDialog)
+BEGIN_EVENT_TABLE(AudioUnitEffectExportDialog, wxDialogWrapper)
    EVT_BUTTON(wxID_OK, AudioUnitEffectExportDialog::OnOk)
 END_EVENT_TABLE()
 
 AudioUnitEffectExportDialog::AudioUnitEffectExportDialog(wxWindow * parent, AudioUnitEffect *effect)
-:  wxDialog(parent, wxID_ANY, wxString(_("Export Audio Unit Presets")))
+:  wxDialogWrapper(parent, wxID_ANY, wxString(_("Export Audio Unit Presets")))
 {
    mEffect = effect;
 
@@ -470,11 +532,18 @@ void AudioUnitEffectExportDialog::PopulateOrExchange(ShuttleGui & S)
 
 void AudioUnitEffectExportDialog::OnOk(wxCommandEvent & WXUNUSED(evt))
 {
+   // Save active settings
+   wxString settingsName(wxT("Export Save"));
+   mEffect->SaveParameters(settingsName);
+
    // Look for selected presets
    long sel = mList->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED);
    while (sel >= 0)
    {
       wxString name = mList->GetItemText(sel);
+
+      // Make the preset current
+      mEffect->LoadParameters(mEffect->mHost->GetUserPresetsGroup(name));
 
       // Make sure the user preset directory exists
       wxString path;
@@ -489,8 +558,7 @@ void AudioUnitEffectExportDialog::OnOk(wxCommandEvent & WXUNUSED(evt))
       path = fn.GetFullPath();
 
       // First set the name of the preset
-      wxMacCFStringHolder cfname;
-      cfname.Assign(name);
+      wxCFStringRef cfname(name);
 
       AUPreset preset;
       preset.presetNumber = -1; // indicates user preset
@@ -514,33 +582,36 @@ void AudioUnitEffectExportDialog::OnOk(wxCommandEvent & WXUNUSED(evt))
                            &size);
 
       // And convert it to XML
-      CFDataRef xml = CFPropertyListCreateXMLData(kCFAllocatorDefault,
-                                                  content);
+      CFunique_ptr<const __CFData> xml {
+         CFPropertyListCreateXMLData(kCFAllocatorDefault, content)
+      };
       if (xml)
       {
          // Create the CFURL for the path
-         CFURLRef url = CFURLCreateWithFileSystemPath(kCFAllocatorDefault,
-                                                      wxMacCFStringHolder(path),
-                                                      kCFURLPOSIXPathStyle,
-                                                      false);
+         CFunique_ptr<const __CFURL> url {
+            CFURLCreateWithFileSystemPath(kCFAllocatorDefault,
+                                          wxCFStringRef(path),
+                                          kCFURLPOSIXPathStyle,
+                                          false)
+         };
          if (url)
          {
             SInt32 error;
-            Boolean res = CFURLWriteDataAndPropertiesToResource(url,
-                                                                xml,
+            Boolean res = CFURLWriteDataAndPropertiesToResource(url.get(),
+                                                                xml.get(),
                                                                 NULL,
                                                                 &error);
-            CFRelease(url);
          }
-   
-         // Get rid of the XML data
-         CFRelease(xml);
       }
 
       // And continue to the next selected preset
       sel = mList->GetNextItem(sel, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED);
    }
 
+   // Restore active settings
+   mEffect->LoadParameters(settingsName);
+   mEffect->mHost->RemovePrivateConfigSubgroup(settingsName);
+   
    EndModal(wxID_OK);
 }
 
@@ -550,7 +621,7 @@ void AudioUnitEffectExportDialog::OnOk(wxCommandEvent & WXUNUSED(evt))
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-class AudioUnitEffectImportDialog:public wxDialog
+class AudioUnitEffectImportDialog final : public wxDialogWrapper
 {
 public:
    AudioUnitEffectImportDialog(wxWindow * parent, AudioUnitEffect *effect);
@@ -569,12 +640,12 @@ private:
    DECLARE_EVENT_TABLE()
 };
 
-BEGIN_EVENT_TABLE(AudioUnitEffectImportDialog, wxDialog)
+BEGIN_EVENT_TABLE(AudioUnitEffectImportDialog, wxDialogWrapper)
    EVT_BUTTON(wxID_OK, AudioUnitEffectImportDialog::OnOk)
 END_EVENT_TABLE()
 
 AudioUnitEffectImportDialog::AudioUnitEffectImportDialog(wxWindow * parent, AudioUnitEffect *effect)
-:  wxDialog(parent, wxID_ANY, wxString(_("Import Audio Unit Presets")))
+:  wxDialogWrapper(parent, wxID_ANY, wxString(_("Import Audio Unit Presets")))
 {
    mEffect = effect;
 
@@ -654,6 +725,10 @@ void AudioUnitEffectImportDialog::PopulateOrExchange(ShuttleGui & S)
 
 void AudioUnitEffectImportDialog::OnOk(wxCommandEvent & WXUNUSED(evt))
 {
+   // Save active settings
+   wxString settingsName(wxT("Import Save"));
+   mEffect->SaveParameters(settingsName);
+
    // Look for selected presets
    long sel = -1;
    while ((sel = mList->GetNextItem(sel, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED)) >= 0)
@@ -670,10 +745,13 @@ void AudioUnitEffectImportDialog::OnOk(wxCommandEvent & WXUNUSED(evt))
                   mList->GetItemText(sel).c_str());
 
       // Create the CFURL for the path
-      CFURLRef url = CFURLCreateWithFileSystemPath(kCFAllocatorDefault,
-                                                   wxMacCFStringHolder(path),
-                                                   kCFURLPOSIXPathStyle,
-                                                   false);
+      CFunique_ptr<const __CFURL> url {
+         CFURLCreateWithFileSystemPath(kCFAllocatorDefault,
+                                       wxCFStringRef(path),
+                                       kCFURLPOSIXPathStyle,
+                                       false)
+      };
+
       if (!url)
       {
          continue;
@@ -682,24 +760,24 @@ void AudioUnitEffectImportDialog::OnOk(wxCommandEvent & WXUNUSED(evt))
       CFDataRef xml;
       SInt32 error;
       Boolean res = CFURLCreateDataAndPropertiesFromResource(kCFAllocatorDefault,
-                                                             url,
+                                                             url.get(),
                                                              &xml,
                                                              NULL,
                                                              NULL,
                                                              &error);
-      CFRelease(url);
+      CFunique_ptr<const __CFData> uxml { xml };
 
       if (!res)
       {
          continue;
       }
 
-      CFPropertyListRef content;
-      content = CFPropertyListCreateFromXMLData(kCFAllocatorDefault,
-                                                 xml,
-                                                 kCFPropertyListImmutable,
-                                                 NULL);
-      CFRelease(xml);
+      CFunique_ptr<char> content {
+         (char*)CFPropertyListCreateFromXMLData(kCFAllocatorDefault,
+                                         xml,
+                                         kCFPropertyListImmutable,
+                                         NULL)
+      };
 
       if (!content)
       {
@@ -712,11 +790,14 @@ void AudioUnitEffectImportDialog::OnOk(wxCommandEvent & WXUNUSED(evt))
                                              0,
                                              &content,
                                              sizeof(content));
-      CFRelease(content);
 
       mEffect->SaveUserPreset(mEffect->mHost->GetUserPresetsGroup(mList->GetItemText(sel)));
    }
 
+   // Restore active settings
+   mEffect->LoadParameters(settingsName);
+   mEffect->mHost->RemovePrivateConfigSubgroup(settingsName);
+   
    EndModal(wxID_OK);
 }
 
@@ -726,140 +807,9 @@ void AudioUnitEffectImportDialog::OnOk(wxCommandEvent & WXUNUSED(evt))
 //
 ///////////////////////////////////////////////////////////////////////////////
 
-/* Not using this yet...was intended to improve resizing
-
-// Event handler to capture the window close event
-static const EventTypeSpec controlEventList[] =
-{
-   {kEventClassControl,kEventControlBoundsChanged},
-};
-
-pascal OSStatus
-AudioUnitEffect::ControlEventHandlerCallback(EventHandlerCallRef handler, EventRef event, void *data)
-{
-   return ((AudioUnitEffect *)data)->ControlEventHandler(event);
-}
-OSStatus AudioUnitEffect::ControlEventHandler(EventRef event)
-{
-   OSStatus result = eventNotHandledErr;
-
-printf("CONTROL class %d kind %d\n", GetEventClass(event), GetEventKind(event));
-   if (GetEventClass(event) == kEventClassControl && GetEventKind(event) == kEventControlBoundsChanged)
-   {
-
-      HIRect rect;
-      HIViewGetFrame(mAUView, &rect);
-
-      ...
-
-      return noErr;
-   }
-
-   return result;
-}
-*/
-
-// Event handler to track when the mouse enters/exits the various view
-static const EventTypeSpec trackingEventList[] =
-{
-   {kEventClassControl, kEventControlTrackingAreaEntered},
-   {kEventClassControl, kEventControlTrackingAreaExited},
-};
-
-pascal OSStatus
-AudioUnitEffect::TrackingEventHandler(EventHandlerCallRef handler, EventRef event, void *data)
-{
-   return ((AudioUnitEffect *)data)->OnTrackingEvent(event);
-}
-
-OSStatus AudioUnitEffect::OnTrackingEvent(EventRef event)
-{
-   OSStatus result = eventNotHandledErr;
-
-   if (GetEventKind(event) == kEventControlTrackingAreaEntered)
-   {
-      // Should we save the existing cursor???
-      SetThemeCursor(kThemeArrowCursor);
-   }
-
-   if (GetEventKind(event) == kEventControlTrackingAreaExited)
-   {
-      // Possibly restore a saved cursor
-   }
-
-   return result;
-}
-
-
-// Event handler to capture the window close event
-static const EventTypeSpec windowEventList[] =
-{
-   {kEventClassMouse, kEventMouseDown},
-   {kEventClassMouse, kEventMouseUp},
-   {kEventClassMouse, kEventMouseMoved},
-   {kEventClassMouse, kEventMouseDragged},
-   {kEventClassMouse, kEventMouseEntered},
-   {kEventClassMouse, kEventMouseExited},
-   {kEventClassMouse, kEventMouseWheelMoved},
-   {kEventClassMouse, kEventMouseScroll},
-    
-   {kEventClassWindow, kEventWindowClose},
-};
-
-pascal OSStatus
-AudioUnitEffect::WindowEventHandlerCallback(EventHandlerCallRef handler, EventRef event, void *data)
-{
-   return ((AudioUnitEffect *)data)->WindowEventHandler(event);
-}
-
-OSStatus AudioUnitEffect::WindowEventHandler(EventRef eventRef)
-{
-   wxMacCarbonEvent event(eventRef);
-   OSStatus result = eventNotHandledErr;
-
-   // Give Cocoa (in HIView) controls first dibs at mouse event
-   if (GetEventClass(event) == kEventClassMouse)
-   {
-      OSStatus result;
-      HIPoint pt;
-
-      result = event.GetParameter(kEventParamMouseLocation,
-                                  typeHIPoint,
-                                  sizeof(pt),
-                                  &pt);
-
-      WindowRef rootWindow = (WindowRef)mDialog->MacGetTopLevelWindowRef();
-      ControlRef rootControl = HIViewGetRoot(rootWindow);
-
-      HIViewRef hitRef = 0;
-      result = HIViewGetViewForMouseEvent(rootControl,
-                                          eventRef,
-                                          &hitRef);
-      if (hitRef == mAUView && !mIsCarbon)
-      {
-         return SendEventToEventTarget(event, mEventRef);
-      }
-   }
-
-   if (GetEventClass(event) == kEventClassWindow && GetEventKind(event) == kEventWindowClose)
-   {
-      if (mDialog)
-      {
-         mDialog->Close();
-         result = noErr;
-      }
-   }
-
-   return result;
-}
-
-BEGIN_EVENT_TABLE(AudioUnitEffect, wxEvtHandler)
-   EVT_SIZE(AudioUnitEffect::OnSize)
-END_EVENT_TABLE()
-
 AudioUnitEffect::AudioUnitEffect(const wxString & path,
                                  const wxString & name,
-                                 Component component,
+                                 AudioComponent component,
                                  AudioUnitEffect *master)
 {
    mPath = path;
@@ -871,24 +821,28 @@ AudioUnitEffect::AudioUnitEffect(const wxString & path,
    mUnit = NULL;
    
    mBlockSize = 0.0;
+   mInteractive = false;
+   mIsGraphical = false;
 
    mUIHost = NULL;
    mDialog = NULL;
    mParent = NULL;
-   mCarbonView = NULL;
-   mHandlerRef = NULL;
-   mHandlerUPP = NULL;
 
-   mRootTrackingHandlerRef = NULL;
-   mContentTrackingHandlerRef = NULL;
-   mAUTrackingHandlerRef = NULL;
-   mTrackingHandlerUPP = NULL;
+   mInputList = NULL;
+   mOutputList = NULL;
+
+   mUnitInitialized = false;
 
    mEventListenerRef = NULL;
 }
 
 AudioUnitEffect::~AudioUnitEffect()
 {
+   if (mUnitInitialized)
+   {
+      AudioUnitUninitialize(mUnit);
+   }
+
    if (mEventListenerRef)
    {
       AUListenerDispose(mEventListenerRef);
@@ -896,7 +850,7 @@ AudioUnitEffect::~AudioUnitEffect()
 
    if (mUnit)
    {
-      CloseComponent(mUnit);
+      AudioComponentInstanceDispose(mUnit);
    }
 }
 
@@ -926,7 +880,9 @@ wxString AudioUnitEffect::GetVendor()
 
 wxString AudioUnitEffect::GetVersion()
 {
-   ComponentResult version = GetComponentVersion((ComponentInstance) mComponent);
+   UInt32 version;
+
+   OSStatus result = AudioComponentGetVersion(mComponent, &version);
 
    return wxString::Format(wxT("%d.%d.%d"),
                            (version >> 16) & 0xffff,
@@ -1022,7 +978,7 @@ bool AudioUnitEffect::SupportsAutomation()
 
    for (int i = 0; i < cnt; i++)
    {
-      AudioUnitParameterInfo info;
+      AudioUnitParameterInfoEx info;
       dataSize = sizeof(info);
       result = AudioUnitGetProperty(mUnit,
                                     kAudioUnitProperty_ParameterInfo,
@@ -1060,8 +1016,7 @@ bool AudioUnitEffect::SetHost(EffectHostInterface *host)
    mHost = host;
    
    mSampleRate = 44100;
-   ComponentResult auResult;
-   auResult = OpenAComponent(mComponent, &mUnit);
+   result = AudioComponentInstanceNew(mComponent, &mUnit);
    if (!mUnit)
    {
       return false;
@@ -1085,7 +1040,9 @@ bool AudioUnitEffect::SetHost(EffectHostInterface *host)
    if (mHost)
    {
       mHost->GetSharedConfig(wxT("Options"), wxT("UseLatency"), mUseLatency, true);
-      mHost->GetSharedConfig(wxT("Options"), wxT("UseGUI"), mUseGUI, true);
+      mHost->GetSharedConfig(wxT("Options"), wxT("UIType"), mUIType, wxT("Full"));
+
+      mUIType = wxGetTranslation(mUIType);
 
       bool haveDefaults;
       mHost->GetPrivateConfig(mHost->GetFactoryDefaultsGroup(), wxT("Initialized"), haveDefaults, false);
@@ -1100,7 +1057,7 @@ bool AudioUnitEffect::SetHost(EffectHostInterface *host)
 
    if (!mMaster)
    {
-      result = AUEventListenerCreate(AudioUnitEffect::EventListenerCallback,
+     result = AUEventListenerCreate(AudioUnitEffect::EventListenerCallback,
                                      this,
                                      (CFRunLoopRef)GetCFRunLoopFromEventLoop(GetCurrentEventLoop()),
                                      kCFRunLoopDefaultMode,
@@ -1179,6 +1136,32 @@ bool AudioUnitEffect::SetHost(EffectHostInterface *host)
       {
          return false;
       }
+
+      AudioUnitCocoaViewInfo cocoaViewInfo;
+      dataSize = sizeof(AudioUnitCocoaViewInfo);
+   
+      // Check for a Cocoa UI
+      result = AudioUnitGetProperty(mUnit,
+                                    kAudioUnitProperty_CocoaUI,
+                                    kAudioUnitScope_Global,
+                                    0,
+                                    &cocoaViewInfo,
+                                    &dataSize);
+
+      bool hasCocoa = result == noErr;
+
+      // Check for a Carbon UI
+      AudioComponentDescription compDesc;
+      dataSize = sizeof(compDesc);
+      result = AudioUnitGetProperty(mUnit,
+                                    kAudioUnitProperty_GetUIComponentList,
+                                    kAudioUnitScope_Global,
+                                    0,
+                                    &compDesc,
+                                    &dataSize);
+      bool hasCarbon = result == noErr;
+
+      mInteractive = (cnt > 0) || hasCocoa || hasCarbon;
    }
 
    return true;
@@ -1204,7 +1187,7 @@ int AudioUnitEffect::GetMidiOutCount()
    return 0;
 }
 
-void AudioUnitEffect::SetSampleRate(sampleCount rate)
+void AudioUnitEffect::SetSampleRate(double rate)
 {
    mSampleRate = rate;
 }
@@ -1230,7 +1213,7 @@ sampleCount AudioUnitEffect::GetLatency()
                            &latency,
                            &dataSize);  
 
-      return (sampleCount) (latency * mSampleRate);
+      return latency * mSampleRate;
    }
 
    return 0;
@@ -1248,7 +1231,7 @@ sampleCount AudioUnitEffect::GetTailSize()
                         &tailTime,
                         &dataSize);  
 
-   return (sampleCount) (tailTime * mSampleRate);
+   return tailTime * mSampleRate;
 }
 
 bool AudioUnitEffect::IsReady()
@@ -1258,7 +1241,7 @@ bool AudioUnitEffect::IsReady()
 
 bool AudioUnitEffect::ProcessInitialize(sampleCount WXUNUSED(totalLen), ChannelNames WXUNUSED(chanMap))
 {
-   ComponentResult auResult;
+   OSStatus result;
 
    mInputList = new AudioBufferList[mAudioIns];
    mInputList->mNumberBuffers = mAudioIns;
@@ -1279,27 +1262,20 @@ bool AudioUnitEffect::ProcessInitialize(sampleCount WXUNUSED(totalLen), ChannelN
    AURenderCallbackStruct callbackStruct;
    callbackStruct.inputProc = RenderCallback;
    callbackStruct.inputProcRefCon = this;
-   auResult = AudioUnitSetProperty(mUnit,
-                                   kAudioUnitProperty_SetRenderCallback,
-                                   kAudioUnitScope_Input,
-                                   0,
-                                   &callbackStruct,
-                                   sizeof(AURenderCallbackStruct));
-   if (auResult != 0)
+   result = AudioUnitSetProperty(mUnit,
+                                 kAudioUnitProperty_SetRenderCallback,
+                                 kAudioUnitScope_Input,
+                                 0,
+                                 &callbackStruct,
+                                 sizeof(AURenderCallbackStruct));
+   if (result != noErr)
    {
       printf("Setting input render callback failed.\n");
       return false;
    }
 
-   auResult = AudioUnitInitialize(mUnit);
-   if (auResult != 0)
-   {
-      printf("Couldn't initialize audio unit\n");
-      return false;
-   }
-
-   auResult = AudioUnitReset(mUnit, kAudioUnitScope_Global, 0);
-   if (auResult != 0)
+   result = AudioUnitReset(mUnit, kAudioUnitScope_Global, 0);
+   if (result != noErr)
    {
       return false;
    }
@@ -1313,12 +1289,7 @@ bool AudioUnitEffect::ProcessInitialize(sampleCount WXUNUSED(totalLen), ChannelN
 
 bool AudioUnitEffect::ProcessFinalize()
 {
-   if (mReady)
-   {
-      AudioUnitUninitialize(mUnit);
-
-      mReady = false;
-   }
+   mReady = false;
 
    if (mOutputList)
    {
@@ -1352,17 +1323,17 @@ sampleCount AudioUnitEffect::ProcessBlock(float **inBlock, float **outBlock, sam
    }
 
    AudioUnitRenderActionFlags flags = 0;
-   ComponentResult auResult;
+   OSStatus result;
 
-   auResult = AudioUnitRender(mUnit,
-                              &flags,
-                              &mTimeStamp,
-                              0,
-                              blockLen,
-                              mOutputList);
-   if (auResult != 0)
+   result = AudioUnitRender(mUnit,
+                            &flags,
+                            &mTimeStamp,
+                            0,
+                            blockLen,
+                            mOutputList);
+   if (result != noErr)
    {
-      printf("Render failed: %d %4.4s\n", (int)auResult, (char *)&auResult);
+      printf("Render failed: %d %4.4s\n", (int)result, (char *)&result);
       return 0;
    }
 
@@ -1392,36 +1363,28 @@ bool AudioUnitEffect::RealtimeInitialize()
 
 bool AudioUnitEffect::RealtimeAddProcessor(int numChannels, float sampleRate)
 {
-   AudioUnitEffect *slave = new AudioUnitEffect(mPath, mName, mComponent, this);
+   auto slave = make_movable<AudioUnitEffect>(mPath, mName, mComponent, this);
    if (!slave->SetHost(NULL))
-   {
-      delete slave;
       return false;
-   }
 
    slave->SetBlockSize(mBlockSize);
    slave->SetChannelCount(numChannels);
    slave->SetSampleRate(sampleRate);
 
    if (!CopyParameters(mUnit, slave->mUnit))
-   {
-      delete slave;
       return false;
-   }
 
-   mSlaves.Add(slave);
+   auto pSlave = slave.get();
+   mSlaves.push_back(std::move(slave));
 
-   return slave->ProcessInitialize(0);
+   return pSlave->ProcessInitialize(0);
 }
 
 bool AudioUnitEffect::RealtimeFinalize()
 {
-   for (size_t i = 0, cnt = mSlaves.GetCount(); i < cnt; i++)
-   {
+   for (size_t i = 0, cnt = mSlaves.size(); i < cnt; i++)
       mSlaves[i]->ProcessFinalize();
-      delete mSlaves[i];
-   }
-   mSlaves.Clear();
+   mSlaves.clear();
 
    for (int i = 0; i < mAudioIns; i++)
    {
@@ -1445,10 +1408,10 @@ bool AudioUnitEffect::RealtimeSuspend()
 
 bool AudioUnitEffect::RealtimeResume()
 {
-   ComponentResult auResult;
+   OSStatus result;
 
-   auResult = AudioUnitReset(mUnit, kAudioUnitScope_Global, 0);
-   if (auResult != 0)
+   result = AudioUnitReset(mUnit, kAudioUnitScope_Global, 0);
+   if (result != noErr)
    {
       return false;
    }
@@ -1477,7 +1440,7 @@ sampleCount AudioUnitEffect::RealtimeProcess(int group,
 
    for (int c = 0; c < mAudioIns; c++)
    {
-      for (sampleCount s = 0; s < numSamples; s++)
+      for (decltype(numSamples) s = 0; s < numSamples; s++)
       {
          mMasterIn[c][s] += inbuf[c][s];
       }
@@ -1555,7 +1518,7 @@ bool AudioUnitEffect::GetAutomationParameters(EffectAutomationParameters & parms
 
    for (int i = 0; i < cnt; i++)
    {
-      AudioUnitParameterInfo info;
+      AudioUnitParameterInfoEx info;
       dataSize = sizeof(info);
       result = AudioUnitGetProperty(mUnit,
                                     kAudioUnitProperty_ParameterInfo,
@@ -1572,12 +1535,7 @@ bool AudioUnitEffect::GetAutomationParameters(EffectAutomationParameters & parms
       wxString name;
       if (info.flags & kAudioUnitParameterFlag_HasCFNameString)
       {
-         wxMacCFStringHolder nameHolder(info.cfNameString, false);
-         name = nameHolder.AsString();
-         if (info.flags & kAudioUnitParameterFlag_CFNameRelease)
-         {
-            CFRelease(info.cfNameString);
-         }
+         name = wxCFStringRef::AsString(info.cfNameString);
       }
 
       if (name.IsEmpty())
@@ -1638,7 +1596,7 @@ bool AudioUnitEffect::SetAutomationParameters(EffectAutomationParameters & parms
 
    for (int i = 0; i < cnt; i++)
    {
-      AudioUnitParameterInfo info;
+      AudioUnitParameterInfoEx info;
       dataSize = sizeof(info);
       result = AudioUnitGetProperty(mUnit,
                                     kAudioUnitProperty_ParameterInfo,
@@ -1655,12 +1613,7 @@ bool AudioUnitEffect::SetAutomationParameters(EffectAutomationParameters & parms
       wxString name;
       if (info.flags & kAudioUnitParameterFlag_HasCFNameString)
       {
-         wxMacCFStringHolder nameHolder(info.cfNameString, false);
-         name = nameHolder.AsString();
-         if (info.flags & kAudioUnitParameterFlag_CFNameRelease)
-         {
-            CFRelease(info.cfNameString);
-         }
+         name = wxCFStringRef::AsString(info.cfNameString);
       }
 
       if (name.IsEmpty())
@@ -1692,6 +1645,13 @@ bool AudioUnitEffect::SetAutomationParameters(EffectAutomationParameters & parms
 
    delete [] array;
 
+   AudioUnitParameter aup;
+   aup.mAudioUnit = mUnit;
+   aup.mParameterID = kAUParameterListener_AnyParameter;
+   aup.mScope = kAudioUnitScope_Global;
+   aup.mElement = 0;
+   AUParameterListenerNotify(NULL, NULL, &aup);
+
    return true;
 }
 
@@ -1717,7 +1677,8 @@ bool AudioUnitEffect::LoadFactoryPreset(int id)
                                  kAudioUnitScope_Global,
                                  0,
                                  &array,
-                                 &dataSize);  
+                                 &dataSize);
+   CFunique_ptr < const __CFArray > uarray { array };
    if (result != noErr)
    {
       return false;
@@ -1746,8 +1707,6 @@ bool AudioUnitEffect::LoadFactoryPreset(int id)
       AUParameterListenerNotify(NULL, NULL, &aup);
    }
 
-   CFRelease(array);
-
    return result == noErr;
 }
 
@@ -1769,16 +1728,15 @@ wxArrayString AudioUnitEffect::GetFactoryPresets()
                                  kAudioUnitScope_Global,
                                  0,
                                  &array,
-                                 &dataSize);  
+                                 &dataSize);
+   CFunique_ptr< const __CFArray > uarray { array };
    if (result == noErr)
    {
       for (CFIndex i = 0, cnt = CFArrayGetCount(array); i < cnt; i++)
       {
          AUPreset *preset = (AUPreset *) CFArrayGetValueAtIndex(array, i);
-         wxMacCFStringHolder holder(preset->presetName, false);
-         presets.Add(holder.AsString());
+         presets.Add(wxCFStringRef::AsString(preset->presetName));
       }
-      CFRelease(array);
    }
                         
    return presets;
@@ -1791,180 +1749,70 @@ wxArrayString AudioUnitEffect::GetFactoryPresets()
 void AudioUnitEffect::SetHostUI(EffectUIHostInterface *host)
 {
    mUIHost = host;
-
-   mHandlerRef = 0;
-   mHandlerUPP = 0;
-   mControlHandlerRef = 0;
-   mControlHandlerUPP = 0;
-
-   mTrackingHandlerUPP = 0;
-   mRootTrackingHandlerRef = 0;
-   mContentTrackingHandlerRef = 0;
-   mAUTrackingHandlerRef = 0;
 }
 
 bool AudioUnitEffect::PopulateUI(wxWindow *parent)
 {
    OSStatus result;
-   mCarbonView = NULL;
 
-   mDialog = (wxDialog *) wxGetTopLevelParent(parent);
+   mDialog = static_cast<wxDialog *>(wxGetTopLevelParent(parent));
    mParent = parent;
 
-   WindowRef windowRef = (WindowRef) mDialog->MacGetWindowRef();
-   ControlRef rootControl = HIViewGetRoot(windowRef);
-
-   // Find the content view within our window
-   HIViewRef contentView;
-   HIViewFindByID(rootControl, kHIViewWindowContentID, &contentView);
-
-   mIsCocoa = false;
-   mIsCarbon = false;
-   mIsGeneric = false;
-
-   // This is a temporary hack to allow usage of effects from Waves.
-   // I don't know why, but they simply do not display.  Could be that
-   // they "prefer" 64-bit and/or Cocoa apps.  I don't want to spend
-   // too much time trying to get them to work though since I suspect
-   // we'll have better luck once we upgrade to wx3 and become Cocoa-based.
-   //
-   // So, we'll use sort of a blacklist to force them to use the generic
-   // view.  They do seem to work fine when using the generic view, but
-   // some will cause Audacity to crash at termination.  It's not harmful,
-   // since it is after all files have been saved.
-   if (mVendor == wxT("Waves"))
+   wxPanel *container;
    {
-//      mUseGUI = false;
+      auto mainSizer = std::make_unique<wxBoxSizer>(wxVERTICAL);
+
+      wxASSERT(mParent); // To justify safenew
+      container = safenew wxPanelWrapper(mParent, wxID_ANY);
+      mainSizer->Add(container, 1, wxEXPAND);
+
+      mParent->SetSizer(mainSizer.release());
    }
 
-   // Create the AU editor
-   HIViewRef auView = NULL;
-   if (mUseGUI)
+   if (mUIType == wxT("Plain"))
    {
-      auView = createCocoa(mUnit);
-      if (auView != NULL)
+      if (!CreatePlain(mParent))
       {
-         mIsCocoa = true;
-      }
-      else
-      {
-         auView = createCarbon(mUnit, windowRef, &mCarbonView);
-         if (auView != NULL)
-         {
-            mIsCarbon = true;
-            // Some effects do not work unless the default handler is removed since
-            // it captures many of the events that the plugins need.  But, it must be
-            // done last since proper window sizing will not occur otherwise.
-            ::RemoveEventHandler((EventHandlerRef) mDialog->MacGetEventHandler());
-         }
+         return false;
       }
    }
-
-   // Either GUI creation failed or the user wants the generic view
-   if (auView == NULL)
+   else
    {
-      ComponentDescription desc;
-
-      result = GetComponentInfo(mComponent, &desc, NULL, NULL, NULL);
-      if (result == noErr && desc.componentType == kAudioUnitType_Panner)
+      auto pControl = std::make_unique<AUControl>();
+      if (!pControl)
       {
-         auView = createPanner(mUnit);
+         return false;
       }
 
-      if (auView == NULL)
+      if (!pControl->Create(container, mComponent, mUnit, mUIType == wxT("Full")))
       {
-         auView = createGeneric(mUnit);
-         if (auView != NULL)
-         {
-            mIsGeneric = true;
-         }
+         return false;
       }
-   }
 
-   // Total failure...bail
-   if (auView == NULL)
-   {
-      return false;
-   }
-   mAUView = auView;
+      {
+         auto innerSizer = std::make_unique<wxBoxSizer>(wxVERTICAL);
 
-   HIViewAddSubview((HIViewRef) mParent->GetHandle(), auView);
-   HIViewPlaceInSuperviewAt(auView, 0, 0);
-   HIViewSetVisible(auView, true);
+         innerSizer->Add(pControl.release(), 1, wxEXPAND);
+         container->SetSizer(innerSizer.release());
+      }
 
-   HIRect rect;
-   HIViewGetFrame(auView, &rect);
+      mParent->SetMinSize(wxDefaultSize);
 
-   mParent->SetMinSize(wxSize(rect.size.width, rect.size.height));
-   mParent->SetSize(wxSize(rect.size.width, rect.size.height));
-   mDialog->Layout();
-   mDialog->Fit();
-   mDialog->SetMinSize(mDialog->GetSize());
-
-   wxSize ps = mParent->GetSize();
-   if ((int) rect.size.width < ps.GetWidth())
-   {
-      rect.size.width = ps.GetWidth();
-      HIViewSetFrame(auView, &rect);
+#ifdef __WXMAC__
+#ifdef __WX_EVTLOOP_BUSY_WAITING__
+      wxEventLoop::SetBusyWaiting(true);
+#endif
+#endif
    }
 
    mParent->PushEventHandler(this);
-
-   mEventRef = GetControlEventTarget(auView);
-
-   // Install a bare minimum handler so we can capture the window close event.  If
-   // it's not captured, we will crash at Audacity termination since the window
-   // is still on the wxWidgets toplevel window lists, but it's already gone.
-   mHandlerUPP = NewEventHandlerUPP(AudioUnitEffect::WindowEventHandlerCallback);
-   InstallWindowEventHandler(windowRef,
-                             mHandlerUPP,
-                             GetEventTypeCount(windowEventList),
-                             windowEventList,
-                             this,
-                             &mHandlerRef);
-
-/* Was intended for improved resizing...not being used
-
-   // Install a bare minimum handler so we can capture the window close event.  If
-   // it's not captured, we will crash at Audacity termination since the window
-   // is still on the wxWidgets toplevel window lists, but it's already gone.
-   mControlHandlerUPP = NewEventHandlerUPP(AudioUnitEffect::ControlEventHandlerCallback);
-   InstallControlEventHandler(auView,
-                             mControlHandlerUPP,
-                             GetEventTypeCount(controlEventList),
-                             controlEventList,
-                             this,
-                             &mControlHandlerRef);
-*/
-   mTrackingHandlerUPP = NewEventHandlerUPP(AudioUnitEffect::TrackingEventHandler);
-   InstallControlEventHandler(rootControl,
-                              mTrackingHandlerUPP,
-                              GetEventTypeCount(trackingEventList),
-                              trackingEventList,
-                              this,
-                              &mRootTrackingHandlerRef);
-   InstallControlEventHandler(contentView,
-                              mTrackingHandlerUPP,
-                              GetEventTypeCount(trackingEventList),
-                              trackingEventList,
-                              this,
-                              &mContentTrackingHandlerRef);
-   InstallControlEventHandler(auView,
-                              mTrackingHandlerUPP,
-                              GetEventTypeCount(trackingEventList),
-                              trackingEventList,
-                              this,
-                              &mAUTrackingHandlerRef);
-   HIViewNewTrackingArea(rootControl, NULL, 0, NULL);
-   HIViewNewTrackingArea(contentView, NULL, 0, NULL);
-   HIViewNewTrackingArea(auView, NULL, 0, NULL);
 
    return true;
 }
 
 bool AudioUnitEffect::IsGraphicalUI()
 {
-   return !mIsGeneric;
+   return mUIType != wxT("Plain");
 }
 
 bool AudioUnitEffect::ValidateUI()
@@ -1983,6 +1831,11 @@ bool AudioUnitEffect::ValidateUI()
    return true;
 }
 
+bool AudioUnitEffect::CreatePlain(wxWindow *parent)
+{
+   return false;
+}
+
 bool AudioUnitEffect::HideUI()
 {
 #if 0
@@ -1996,20 +1849,13 @@ bool AudioUnitEffect::HideUI()
 
 bool AudioUnitEffect::CloseUI()
 {
-   RemoveHandler();
+#ifdef __WXMAC__
+#ifdef __WX_EVTLOOP_BUSY_WAITING__
+   wxEventLoop::SetBusyWaiting(false);
+#endif
+#endif
 
    mParent->RemoveEventHandler(this);
-
-   if (mCarbonView)
-   {
-      CloseComponent(mCarbonView);
-   }
-
-   if (mIsCarbon)
-   {
-      // Reinstall the wxWidgets toplevel event handler
-      mDialog->MacInstallTopLevelWindowEventHandler();
-   }
 
    mUIHost = NULL;
    mParent = NULL;
@@ -2047,7 +1893,9 @@ void AudioUnitEffect::ShowOptions()
    {
       // Reinitialize configuration settings
       mHost->GetSharedConfig(wxT("Options"), wxT("UseLatency"), mUseLatency, true);
-      mHost->GetSharedConfig(wxT("Options"), wxT("UseGUI"), mUseGUI, true);
+      mHost->GetSharedConfig(wxT("Options"), wxT("UIType"), mUIType, wxT("Full"));
+
+      mUIType = wxGetTranslation(mUIType);
    }
 }
 
@@ -2055,237 +1903,49 @@ void AudioUnitEffect::ShowOptions()
 // AudioUnitEffect Implementation
 // ============================================================================
 
-void AudioUnitEffect::OnSize(wxSizeEvent & evt)
-{
-   // The parent panel has been resized, so make the AU the
-   // same size.
-   HIRect rect;
-   HIViewGetFrame((HIViewRef) mParent->GetHandle(), &rect);
-   HIViewSetFrame(mAUView, &rect);
-}
-
-void AudioUnitEffect::RemoveHandler()
-{
-   if (mAUTrackingHandlerRef)
-   {
-      ::RemoveEventHandler(mAUTrackingHandlerRef);
-      mAUTrackingHandlerRef = 0;
-   }
-
-   if (mContentTrackingHandlerRef)
-   {
-      ::RemoveEventHandler(mContentTrackingHandlerRef);
-      mContentTrackingHandlerRef = 0;
-   }
-
-   if (mRootTrackingHandlerRef)
-   {
-      ::RemoveEventHandler(mRootTrackingHandlerRef);
-      mRootTrackingHandlerRef = 0;
-   }
-
-   if (mTrackingHandlerUPP)
-   {
-      DisposeEventHandlerUPP(mTrackingHandlerUPP);
-      mTrackingHandlerUPP = 0;
-   }
-
-   if (mControlHandlerRef)
-   {
-      ::RemoveEventHandler(mControlHandlerRef);
-      mControlHandlerRef = 0;
-   }
-
-   if (mControlHandlerUPP)
-   {
-      DisposeEventHandlerUPP(mControlHandlerUPP);
-      mControlHandlerUPP = 0;
-   }
-
-   if (mHandlerRef)
-   {
-      ::RemoveEventHandler(mHandlerRef);
-      mHandlerRef = 0;
-   }
-
-   if (mHandlerUPP)
-   {
-      DisposeEventHandlerUPP(mHandlerUPP);
-      mHandlerUPP = 0;
-   }
-}
-
 bool AudioUnitEffect::LoadParameters(const wxString & group)
 {
-   OSStatus result;
-   UInt32 dataSize;
-   Boolean isWritable;
-
-   wxString value;
-   if (!mHost->GetPrivateConfig(group, wxT("Value"), value, wxEmptyString))
-   {
-      return false;
-   }
-   wxStringTokenizer tokens(value, wxT(','));
-
-   result = AudioUnitGetPropertyInfo(mUnit,
-                                     kAudioUnitProperty_ParameterList,
-                                     kAudioUnitScope_Global,
-                                     0,
-                                     &dataSize,
-                                     &isWritable);
-   if (result != noErr)
+   wxString parms;
+   if (!mHost->GetPrivateConfig(group, wxT("Parameters"), parms, wxEmptyString))
    {
       return false;
    }
 
-   UInt32 cnt = dataSize / sizeof(AudioUnitParameterID);
-
-   if (cnt != tokens.CountTokens())
+   EffectAutomationParameters eap;
+   if (!eap.SetParameters(parms))
    {
       return false;
    }
 
-   AudioUnitParameterID *array = new AudioUnitParameterID[cnt];
-
-   result = AudioUnitGetProperty(mUnit,
-                                 kAudioUnitProperty_ParameterList,
-                                 kAudioUnitScope_Global,
-                                 0,
-                                 array,
-                                 &dataSize);  
-   if (result != noErr)
-   {
-      delete [] array;
-      return false;
-   }
-
-   for (int i = 0; i < cnt; i++)
-   {
-      double d = 0.0;
-      tokens.GetNextToken().ToDouble(&d);
-
-      AudioUnitParameterValue value = d;
-      result = AudioUnitSetParameter(mUnit,
-                                     array[i],
-                                     kAudioUnitScope_Global,
-                                     0,
-                                     value,
-                                     0);
-      if (result != noErr)
-      {
-         delete [] array;
-         return false;
-      }
-   }
-
-   AudioUnitParameter aup;
-   aup.mAudioUnit = mUnit;
-   aup.mParameterID = kAUParameterListener_AnyParameter;
-   aup.mScope = kAudioUnitScope_Global;
-   aup.mElement = 0;
-   AUParameterListenerNotify(NULL, NULL, &aup);
-
-   delete [] array;
-
-   return true;
+   return SetAutomationParameters(eap);
 }
 
 bool AudioUnitEffect::SaveParameters(const wxString & group)
 {
-   OSStatus result;
-   UInt32 dataSize;
-   Boolean isWritable;
+   EffectAutomationParameters eap;
+   if (!GetAutomationParameters(eap))
+   {
+      return false;
+   }
+
    wxString parms;
-
-   result = AudioUnitGetPropertyInfo(mUnit,
-                                     kAudioUnitProperty_ParameterList,
-                                     kAudioUnitScope_Global,
-                                     0,
-                                     &dataSize,
-                                     &isWritable);
-   if (result != noErr)
+   if (!eap.GetParameters(parms))
    {
       return false;
    }
 
-   UInt32 cnt = dataSize / sizeof(AudioUnitParameterID);
-   AudioUnitParameterID *array = new AudioUnitParameterID[cnt];
-
-   result = AudioUnitGetProperty(mUnit,
-                                 kAudioUnitProperty_ParameterList,
-                                 kAudioUnitScope_Global,
-                                 0,
-                                 array,
-                                 &dataSize);  
-   if (result != noErr)
-   {
-      delete [] array;
-      return false;
-   }
-
-   for (int i = 0; i < cnt; i++)
-   {
-      AudioUnitParameterValue value;
-      result = AudioUnitGetParameter(mUnit,
-                                     array[i],
-                                     kAudioUnitScope_Global,
-                                     0,
-                                     &value);
-      if (result != noErr)
-      {
-         delete [] array;
-         return false;
-      }
-
-      parms += wxString::Format(wxT(",%f"), value);
-   }
-
-   mHost->SetPrivateConfig(group, wxT("Value"), parms.Mid(1));
-
-   delete [] array;
-
-   return true;
+   return mHost->SetPrivateConfig(group, wxT("Parameters"), parms);
 }
 
 bool AudioUnitEffect::SetRateAndChannels()
 {
-   ComponentResult auResult;
+   OSStatus result;
 
-   auResult = AudioUnitSetProperty(mUnit,
-                                   kAudioUnitProperty_SampleRate,
-                                   kAudioUnitScope_Global,
-                                   0,
-                                   &mSampleRate,
-                                   sizeof(Float64));
-   if (auResult != 0)
+   if (mUnitInitialized)
    {
-      printf("Didn't accept sample rate\n");
-      return false;
-   }
+      AudioUnitUninitialize(mUnit);
 
-   auResult = AudioUnitSetProperty(mUnit,
-                                   kAudioUnitProperty_SampleRate,
-                                   kAudioUnitScope_Input,
-                                   0,
-                                   &mSampleRate,
-                                   sizeof(Float64));
-   if (auResult != 0)
-   {
-      printf("Didn't accept sample rate\n");
-      return false;
-   }
-
-   auResult = AudioUnitSetProperty(mUnit,
-                                   kAudioUnitProperty_SampleRate,
-                                   kAudioUnitScope_Output,
-                                   0,
-                                   &mSampleRate,
-                                   sizeof(Float64));
-   if (auResult != 0)
-   {
-      printf("Didn't accept sample rate\n");
-      return false;
+      mUnitInitialized = false;
    }
 
    AudioStreamBasicDescription streamFormat = {0};
@@ -2300,36 +1960,89 @@ bool AudioUnitEffect::SetRateAndChannels()
    streamFormat.mBytesPerFrame = sizeof(float);
    streamFormat.mBytesPerPacket = sizeof(float);
 
-   auResult = AudioUnitSetProperty(mUnit,
-                                   kAudioUnitProperty_StreamFormat,
-                                   kAudioUnitScope_Input,
-                                   0,
-                                   &streamFormat,
-                                   sizeof(AudioStreamBasicDescription));
-   if (auResult != 0)
+   result = AudioUnitSetProperty(mUnit,
+                                 kAudioUnitProperty_SampleRate,
+                                 kAudioUnitScope_Global,
+                                 0,
+                                 &mSampleRate,
+                                 sizeof(Float64));
+   if (result != noErr)
    {
+      printf("%ls Didn't accept sample rate on global\n", GetName().wx_str());
       return false;
    }
 
-   streamFormat.mChannelsPerFrame = mAudioOuts;
-   auResult = AudioUnitSetProperty(mUnit,
-                                   kAudioUnitProperty_StreamFormat,
-                                   kAudioUnitScope_Output,
-                                   0,
-                                   &streamFormat,
-                                   sizeof(AudioStreamBasicDescription));
-
-   if (auResult != 0)
+   if (mAudioIns > 0)
    {
+      result = AudioUnitSetProperty(mUnit,
+                                    kAudioUnitProperty_SampleRate,
+                                    kAudioUnitScope_Input,
+                                    0,
+                                    &mSampleRate,
+                                    sizeof(Float64));
+      if (result != noErr)
+      {
+         printf("%ls Didn't accept sample rate on input\n", GetName().wx_str());
+         return false;
+      }
+
+      result = AudioUnitSetProperty(mUnit,
+                                    kAudioUnitProperty_StreamFormat,
+                                    kAudioUnitScope_Input,
+                                    0,
+                                    &streamFormat,
+                                    sizeof(AudioStreamBasicDescription));
+      if (result != noErr)
+      {
+         printf("%ls didn't accept stream format on input\n", GetName().wx_str());
+         return false;
+      }
+   }
+
+   if (mAudioOuts > 0)
+   {
+      result = AudioUnitSetProperty(mUnit,
+                                    kAudioUnitProperty_SampleRate,
+                                    kAudioUnitScope_Output,
+                                    0,
+                                    &mSampleRate,
+                                    sizeof(Float64));
+      if (result != noErr)
+      {
+         printf("%ls Didn't accept sample rate on output\n", GetName().wx_str());
+         return false;
+      }
+   
+      streamFormat.mChannelsPerFrame = mAudioOuts;
+      result = AudioUnitSetProperty(mUnit,
+                                    kAudioUnitProperty_StreamFormat,
+                                    kAudioUnitScope_Output,
+                                    0,
+                                    &streamFormat,
+                                    sizeof(AudioStreamBasicDescription));
+   
+      if (result != noErr)
+      {
+         printf("%ls didn't accept stream format on output\n", GetName().wx_str());
+         return false;
+      }
+   }
+
+   result = AudioUnitInitialize(mUnit);
+   if (result != noErr)
+   {
+      printf("Couldn't initialize audio unit\n");
       return false;
    }
+
+   mUnitInitialized = true;
 
    return true;
 }
 
 bool AudioUnitEffect::CopyParameters(AudioUnit srcUnit, AudioUnit dstUnit)
 {
-   ComponentResult auResult;
+   OSStatus result;
    int numParameters, i;
    AudioUnitParameterID *parameters;
    Float32 parameterValue;
@@ -2339,13 +2052,13 @@ bool AudioUnitEffect::CopyParameters(AudioUnit srcUnit, AudioUnit dstUnit)
    // getting back the size of the parameter list
 
    size = 0;
-   auResult = AudioUnitGetProperty(srcUnit,
+   result = AudioUnitGetProperty(srcUnit,
                                    kAudioUnitProperty_ParameterList,
                                    kAudioUnitScope_Global,
                                    0,
                                    NULL,
                                    &size);
-   if (auResult != 0)
+   if (result != 0)
    {
       printf("Couldn't get number of parameters\n");
       return false;
@@ -2355,13 +2068,13 @@ bool AudioUnitEffect::CopyParameters(AudioUnit srcUnit, AudioUnit dstUnit)
 
    numParameters = size / sizeof(AudioUnitParameterID);
    parameters = new AudioUnitParameterID[numParameters];
-   auResult = AudioUnitGetProperty(srcUnit,
+   result = AudioUnitGetProperty(srcUnit,
                                    kAudioUnitProperty_ParameterList,
                                    kAudioUnitScope_Global,
                                    0,
                                    parameters,
                                    &size);
-   if (auResult != 0)
+   if (result != 0)
    {
       printf("Couldn't get parameter list\n");
       delete[] parameters;
@@ -2373,24 +2086,24 @@ bool AudioUnitEffect::CopyParameters(AudioUnit srcUnit, AudioUnit dstUnit)
 
    for (i = 0; i < numParameters; i++)
    {
-      auResult = AudioUnitGetParameter(srcUnit,
+      result = AudioUnitGetParameter(srcUnit,
                                        parameters[i],
                                        kAudioUnitScope_Global,
                                        0,
                                        &parameterValue);
-      if (auResult != 0)
+      if (result != 0)
       {
          printf("Couldn't get parameter %d: ID=%d\n", i, (int)parameters[i]);
          continue;
       }
 
-      auResult = AudioUnitSetParameter(dstUnit,
+      result = AudioUnitSetParameter(dstUnit,
                                        parameters[i],
                                        kAudioUnitScope_Global,
                                        0,
                                        parameterValue,
                                        0);
-      if (auResult != 0)
+      if (result != 0)
       {
          printf("Couldn't set parameter %d: ID=%d\n", i, (int)parameters[i]);
       }
@@ -2471,10 +2184,8 @@ void AudioUnitEffect::EventListener(const AudioUnitEvent *inEvent,
    else
    {
       // We're the master, so propogate 
-      for (size_t i = 0, cnt = mSlaves.GetCount(); i < cnt; i++)
-      {
+      for (size_t i = 0, cnt = mSlaves.size(); i < cnt; i++)
          mSlaves[i]->EventListener(inEvent, inParameterValue);
-      }
    }
 }
                            
@@ -2648,3 +2359,5 @@ void AudioUnitEffect::GetChannelCounts()
 
    return;
 }
+
+#endif

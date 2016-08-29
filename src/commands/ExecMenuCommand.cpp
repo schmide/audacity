@@ -24,21 +24,21 @@ wxString ExecMenuCommandType::BuildName()
 
 void ExecMenuCommandType::BuildSignature(CommandSignature &signature)
 {
-   Validator *menuCommandValidator(new Validator());
-   signature.AddParameter(wxT("CommandName"), wxT(""), menuCommandValidator);
+   auto menuCommandValidator = make_movable<DefaultValidator>();
+   signature.AddParameter(wxT("CommandName"), wxT(""), std::move(menuCommandValidator));
 }
 
-Command *ExecMenuCommandType::Create(CommandOutputTarget *target)
+CommandHolder ExecMenuCommandType::Create(std::unique_ptr<CommandOutputTarget> &&target)
 {
-   return new ExecMenuCommand(*this, target);
+   return std::make_shared<ExecMenuCommand>(*this, std::move(target));
 }
 
 bool ExecMenuCommand::Apply(CommandExecutionContext context)
 {
-   CommandManager *cmdManager = context.proj->GetCommandManager();
+   CommandManager *cmdManager = context.GetProject()->GetCommandManager();
 
    wxString cmdName = GetString(wxT("CommandName"));
-   wxUint32 cmdFlags = 0; // TODO ?
-   wxUint32 cmdMask = 0;
+   auto cmdFlags = AlwaysEnabledFlag; // TODO ?
+   auto cmdMask = AlwaysEnabledFlag;
    return cmdManager->HandleTextualCommand(cmdName, cmdFlags, cmdMask);
 }

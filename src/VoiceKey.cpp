@@ -32,12 +32,15 @@ or "OFF" point
 #include <wx/intl.h>
 #include <iostream>
 
+#include "WaveTrack.h"
+
 using std::cout;
 using std::endl;
 
 
 
-VoiceKey::VoiceKey(){
+VoiceKey::VoiceKey()
+{
 
    mWindowSize = 0.01;                    //size of analysis window in seconds
 
@@ -64,7 +67,8 @@ VoiceKey::VoiceKey(){
 };
 
 
-VoiceKey::~VoiceKey(){
+VoiceKey::~VoiceKey()
+{
 };
 
 
@@ -81,7 +85,8 @@ VoiceKey::~VoiceKey(){
 
 
 //Move forward to find an ON region.
-sampleCount VoiceKey::OnForward (WaveTrack & t, sampleCount start, sampleCount len) {
+sampleCount VoiceKey::OnForward (WaveTrack & t, sampleCount start, sampleCount len)
+{
 
    if((mWindowSize) >= len+10){
 
@@ -93,20 +98,18 @@ sampleCount VoiceKey::OnForward (WaveTrack & t, sampleCount start, sampleCount l
       wxMessageBox(_("Selection is too small to use voice key."));
       return start;
    }
-   else{
-
-      sampleCount lastsubthresholdsample;     // keeps track of the sample number of the last sample to not exceed the threshold
+   else {
 
       //Change the millisecond-based parameters into sample-based parameters
       double rate = t.GetRate();                                                     //Translates seconds to samples
       unsigned int WindowSizeInt = (unsigned int)(rate  * mWindowSize);               //Size of window to examine
       unsigned int SignalWindowSizeInt = (unsigned int)(rate  * mSignalWindowSize);   //This much signal is necessary to trip key
 
-      int samplesleft = len - WindowSizeInt;   //Indexes the number of samples remaining in the selection
-      lastsubthresholdsample = start;          //start this off at the selection start
-      unsigned int i;                                   //iterates through waveblock
+      auto samplesleft = len - WindowSizeInt;   //Indexes the number of samples remaining in the selection
+      auto lastsubthresholdsample = start;          //start this off at the selection start
+      // keeps track of the sample number of the last sample to not exceed the threshold
+
       int blockruns=0;                         //keeps track of the number of consecutive above-threshold blocks
-      int blocksize;                           //The final block may be smaller than WindowSizeInt, so use this
 
 
       //This loop goes through the selection a block at a time.  If a long enough run
@@ -114,21 +117,17 @@ sampleCount VoiceKey::OnForward (WaveTrack & t, sampleCount start, sampleCount l
       //go through one sample at a time.
       //If there are fewer than 10 samples leftover, don't bother.
 
-      for(i = start; samplesleft >=10; i+=(WindowSizeInt-1) , samplesleft -= (WindowSizeInt -1)){
+      for(auto i = start; samplesleft >= 10;
+          i += (WindowSizeInt - 1) , samplesleft -= (WindowSizeInt - 1)) {
 
          //Set blocksize so that it is the right size
-         if((unsigned int)samplesleft < WindowSizeInt){
-            blocksize = samplesleft;
-         }
-         else{
-            blocksize = WindowSizeInt;
-         }
+         const auto blocksize = limitSampleBufferSize( WindowSizeInt, samplesleft);
 
          //Test whether we are above threshold (the number of stats)
          if(AboveThreshold(t,i,blocksize))
             {
                blockruns++;                   //Hit
-            } else{
+            } else {
                blockruns=0;                   //Miss--start over
                lastsubthresholdsample = i;
             }
@@ -140,17 +139,17 @@ sampleCount VoiceKey::OnForward (WaveTrack & t, sampleCount start, sampleCount l
       }
 
       //Now, if we broke out early (samplesleft > 10), go back to the lastsubthresholdsample and look more carefully
-      if(samplesleft > 10){
+      if(samplesleft > 10) {
 
 
          //Calculate how many to scan through--we only have to go through (at most)
          //the first window + 1 samples--but we need another window samples to draw from.
-         samplesleft = 2*WindowSizeInt+1;
+         auto remaining = 2*WindowSizeInt+1;
 
          //To speed things up, create a local buffer to store things in, to avoid the costly t.Get();
          //Only go through the first SignalWindowSizeInt samples, and choose the first that trips the key.
-         sampleFormat *buffer = new sampleFormat[samplesleft];
-         t.Get((samplePtr)buffer, floatSample,lastsubthresholdsample,samplesleft);
+         float *buffer = new float[remaining];
+         t.Get((samplePtr)buffer, floatSample, lastsubthresholdsample, remaining);
 
 
 
@@ -176,7 +175,9 @@ sampleCount VoiceKey::OnForward (WaveTrack & t, sampleCount start, sampleCount l
 
 
          //Now, go through the sound again, sample by sample.
-         for(i=0; i<SignalWindowSizeInt-WindowSizeInt;i++){
+         wxASSERT(WindowSizeInt < SignalWindowSizeInt);
+         size_t i;
+         for(i = 0; i < SignalWindowSizeInt - WindowSizeInt; i++) {
 
             int tests = 0;
             int testThreshold = 0;
@@ -225,9 +226,9 @@ sampleCount VoiceKey::OnForward (WaveTrack & t, sampleCount start, sampleCount l
 
          //When we get here, i+lastsubthresholdsample is the best guess for where the word starts
          delete [] buffer;
-         return i+lastsubthresholdsample;
+         return i + lastsubthresholdsample;
       }
-      else{
+      else {
          //If we failed to find anything, return the start position
          return start ;
       }
@@ -235,7 +236,8 @@ sampleCount VoiceKey::OnForward (WaveTrack & t, sampleCount start, sampleCount l
 }
 
 //Move backward from end to find an ON region.
-sampleCount VoiceKey::OnBackward (WaveTrack & t, sampleCount end, sampleCount len) {
+sampleCount VoiceKey::OnBackward (WaveTrack & t, sampleCount end, sampleCount len)
+{
 
 
    if((mWindowSize) >= len+10){
@@ -243,35 +245,30 @@ sampleCount VoiceKey::OnBackward (WaveTrack & t, sampleCount end, sampleCount le
       wxMessageBox(_("Selection is too small to use voice key."));
       return end;
    }
-   else{
-
-      sampleCount lastsubthresholdsample;     // keeps track of the sample number of the last sample to not exceed the threshold
+   else {
 
       //Change the millisecond-based parameters into sample-based parameters
       double rate = t.GetRate();                                                     //Translates seconds to samples
       unsigned int WindowSizeInt = (unsigned int)(rate  * mWindowSize);               //Size of window to examine
       //unsigned int SilentWindowSizeInt = (unsigned int)(rate  * mSilentWindowSize);   //This much signal is necessary to trip key
 
-      int samplesleft = len - WindowSizeInt;                 //Indexes the number of samples remaining in the selection
-      lastsubthresholdsample = end;            //start this off at the end
-      unsigned int i;                                   //iterates through waveblock
+      auto samplesleft = len - WindowSizeInt;                 //Indexes the number of samples remaining in the selection
+      auto lastsubthresholdsample = end;            //start this off at the end
+      // keeps track of the sample number of the last sample to not exceed the threshold
+
       int blockruns=0;                         //keeps track of the number of consecutive above-threshold blocks
-      int blocksize;                           //The final block may be smaller than WindowSizeInt, so use this
 
 
       //This loop goes through the selection a block at a time in reverse order.  If a long enough run
       //of above-threshold blocks occur, we return to the last sub-threshold block and
       //go through one sample at a time.
       //If there are fewer than 10 samples leftover, don't bother.
-      for(i = end - WindowSizeInt; samplesleft >=10; i-=(WindowSizeInt-1) , samplesleft -= (WindowSizeInt -1)){
+      for(auto i = end - WindowSizeInt; samplesleft >= 10;
+          i -= (WindowSizeInt - 1) , samplesleft -= (WindowSizeInt - 1)) {
 
          //Set blocksize so that it is the right size
-         if(samplesleft < (int)WindowSizeInt){
-            blocksize = samplesleft;
-         }
-         else{
-            blocksize = WindowSizeInt;
-         }
+
+         const auto blocksize = limitSampleBufferSize( WindowSizeInt, samplesleft);
 
 
          //Test whether we are above threshold
@@ -292,21 +289,22 @@ sampleCount VoiceKey::OnBackward (WaveTrack & t, sampleCount end, sampleCount le
       }
 
       //Now, if we broke out early (samplesleft > 10), go back to the lastsubthresholdsample and look more carefully
-      if(samplesleft > 10){
+      if(samplesleft > 10) {
 
          //Calculate how many to scan through--we only have to go through (at most)
          //the first window + 1 samples--but we need another window samples to draw from.
-         samplesleft = 2*WindowSizeInt+1;
+         auto remaining = 2*WindowSizeInt+1;
 
          //To speed things up, create a local buffer to store things in, to avoid the costly t.Get();
          //Only go through the first mSilentWindowSizeInt samples, and choose the first that trips the key.
-         sampleFormat *buffer = new sampleFormat[samplesleft];
-         t.Get((samplePtr)buffer, floatSample, lastsubthresholdsample-samplesleft,samplesleft);
+         float *buffer = new float[remaining];
+         t.Get((samplePtr)buffer, floatSample, lastsubthresholdsample-remaining, remaining);
 
          //Initialize these trend markers atrend and ztrend.  They keep track of the
          //up/down trends at the start and end of the evaluation window.
-         int atrend = sgn(buffer[samplesleft - 2]-buffer[samplesleft - 1]);
-         int ztrend = sgn(buffer[samplesleft - WindowSizeInt-2]-buffer[samplesleft - WindowSizeInt-2]);
+         int atrend = sgn(buffer[remaining - 2]-buffer[remaining - 1]);
+         int ztrend = sgn(buffer[remaining - WindowSizeInt - 2] -
+                          buffer[remaining - WindowSizeInt - 2]);
 
          double erg=0;
          double sc = 0;
@@ -321,7 +319,8 @@ sampleCount VoiceKey::OnBackward (WaveTrack & t, sampleCount end, sampleCount le
             dc  = TestDirectionChanges(t,lastsubthresholdsample,WindowSizeInt);
 
          //Now, go through the sound again, sample by sample.
-         for(i=samplesleft-1;  i>WindowSizeInt; i--){
+         size_t i;
+         for(i = remaining - 1;  i > WindowSizeInt; i--) {
             int tests = 0;
             int testThreshold = 0;
             //Update the test statistics
@@ -364,9 +363,9 @@ sampleCount VoiceKey::OnBackward (WaveTrack & t, sampleCount end, sampleCount le
 
          //When we get here, i+lastsubthresholdsample is the best guess for where the word starts
          delete [] buffer;
-         return lastsubthresholdsample - samplesleft + i;
+         return lastsubthresholdsample - remaining + i;
       }
-      else{
+      else {
          //If we failed to find anything, return the start position
          return end ;
       }
@@ -375,16 +374,15 @@ sampleCount VoiceKey::OnBackward (WaveTrack & t, sampleCount end, sampleCount le
 
 
 //Move froward from the start to find an OFF region.
-sampleCount VoiceKey::OffForward (WaveTrack & t, sampleCount start, sampleCount len) {
+sampleCount VoiceKey::OffForward (WaveTrack & t, sampleCount start, sampleCount len)
+{
 
    if((mWindowSize) >= len+10){
       wxMessageBox(_("Selection is too small to use voice key."));
 
       return start;
    }
-   else{
-
-       sampleCount lastsubthresholdsample;     // keeps track of the sample number of the last sample to not exceed the threshold
+   else {
 
 
       //Change the millisecond-based parameters into sample-based parameters
@@ -392,25 +390,21 @@ sampleCount VoiceKey::OffForward (WaveTrack & t, sampleCount start, sampleCount 
       unsigned int WindowSizeInt = (unsigned int)(rate  * mWindowSize);               //Size of window to examine
       unsigned int SilentWindowSizeInt = (unsigned int)(rate  * mSilentWindowSize);   //This much signal is necessary to trip key
 
-      int samplesleft = len - WindowSizeInt;   //Indexes the number of samples remaining in the selection
-      lastsubthresholdsample = start;          //start this off at the selection start
-      unsigned int i;                                   //iterates through waveblock
+      auto samplesleft = len - WindowSizeInt;   //Indexes the number of samples remaining in the selection
+      auto lastsubthresholdsample = start;          //start this off at the selection start
+      // keeps track of the sample number of the last sample to not exceed the threshold
+
       int blockruns=0;                         //keeps track of the number of consecutive above-threshold blocks
-      int blocksize;                           //The final block may be smaller than WindowSizeInt, so use this
 
       //This loop goes through the selection a block at a time.  If a long enough run
       //of above-threshold blocks occur, we return to the last sub-threshold block and
       //go through one sample at a time.
       //If there are fewer than 10 samples leftover, don't bother.
-      for(i = start; samplesleft >=10; i+=(WindowSizeInt-1) , samplesleft -= (WindowSizeInt -1)){
+      for(auto i = start; samplesleft >= 10;
+          i += (WindowSizeInt - 1) , samplesleft -= (WindowSizeInt - 1)) {
 
          //Set blocksize so that it is the right size
-         if(samplesleft < (int)WindowSizeInt){
-            blocksize = samplesleft;
-         }
-         else{
-            blocksize = WindowSizeInt;
-         }
+         const auto blocksize = limitSampleBufferSize( WindowSizeInt, samplesleft);
 
          if(!AboveThreshold(t,i,blocksize))
             {
@@ -429,17 +423,17 @@ sampleCount VoiceKey::OffForward (WaveTrack & t, sampleCount start, sampleCount 
       }
 
       //Now, if we broke out early (samplesleft > 10), go back to the lastsubthresholdsample and look more carefully
-      if(samplesleft > 10){
+      if(samplesleft > 10) {
 
 
          //Calculate how many to scan through--we only have to go through (at most)
          //the first window + 1 samples--but we need another window samples to draw from.
-         samplesleft = 2*WindowSizeInt+1;
+         auto remaining = 2*WindowSizeInt+1;
 
          //To speed things up, create a local buffer to store things in, to avoid the costly t.Get();
          //Only go through the first SilentWindowSizeInt samples, and choose the first that trips the key.
-         sampleFormat *buffer = new sampleFormat[samplesleft];
-         t.Get((samplePtr)buffer, floatSample, lastsubthresholdsample,samplesleft);
+         float *buffer = new float[remaining];
+         t.Get((samplePtr)buffer, floatSample, lastsubthresholdsample, remaining);
 
          //Initialize these trend markers atrend and ztrend.  They keep track of the
          //up/down trends at the start and end of the evaluation window.
@@ -460,7 +454,8 @@ sampleCount VoiceKey::OffForward (WaveTrack & t, sampleCount start, sampleCount 
             dc  = TestDirectionChanges(t,lastsubthresholdsample,WindowSizeInt);
 
          //Now, go through the sound again, sample by sample.
-         for(i=0; i<SilentWindowSizeInt-WindowSizeInt;i++){
+         size_t i;
+         for(i = 0; i < SilentWindowSizeInt - WindowSizeInt; i++) {
             int tests = 0;
             int testThreshold = 0;
             //Update the test statistics
@@ -503,9 +498,9 @@ sampleCount VoiceKey::OffForward (WaveTrack & t, sampleCount start, sampleCount 
 
          //When we get here, i+lastsubthresholdsample is the best guess for where the word starts
          delete [] buffer;
-         return i+lastsubthresholdsample;
+         return i + lastsubthresholdsample;
       }
-      else{
+      else {
          //If we failed to find anything, return the start position
          return start ;
       }
@@ -514,7 +509,8 @@ sampleCount VoiceKey::OffForward (WaveTrack & t, sampleCount start, sampleCount 
 
 
 //Move backward from the end to find an OFF region
-sampleCount VoiceKey::OffBackward (WaveTrack & t, sampleCount end, sampleCount len) {
+sampleCount VoiceKey::OffBackward (WaveTrack & t, sampleCount end, sampleCount len)
+{
 
 
    if((mWindowSize) >= len+10){
@@ -522,34 +518,28 @@ sampleCount VoiceKey::OffBackward (WaveTrack & t, sampleCount end, sampleCount l
       wxMessageBox(_("Selection is too small to use voice key."));
       return end;
    }
-   else{
-
-      sampleCount lastsubthresholdsample;     // keeps track of the sample number of the last sample to not exceed the threshold
+   else {
 
       //Change the millisecond-based parameters into sample-based parameters
       double rate = t.GetRate();                                                     //Translates seconds to samples
       unsigned int WindowSizeInt = (unsigned int)(rate  * mWindowSize);               //Size of window to examine
       //unsigned int SilentWindowSizeInt = (unsigned int)(rate  * mSilentWindowSize);   //This much signal is necessary to trip key
 
-      int samplesleft = len - WindowSizeInt;                 //Indexes the number of samples remaining in the selection
-      lastsubthresholdsample = end;            //start this off at the end
-      unsigned int i;                                   //iterates through waveblock
+      auto samplesleft = len - WindowSizeInt;                 //Indexes the number of samples remaining in the selection
+      auto lastsubthresholdsample = end;            //start this off at the end
+      // keeps track of the sample number of the last sample to not exceed the threshold
+
       int blockruns=0;                         //keeps track of the number of consecutive above-threshold blocks
-      int blocksize;                           //The final block may be smaller than WindowSizeInt, so use this
 
       //This loop goes through the selection a block at a time in reverse order.  If a long enough run
       //of above-threshold blocks occur, we return to the last sub-threshold block and
       //go through one sample at a time.
       //If there are fewer than 10 samples leftover, don't bother.
-      for(i = end - WindowSizeInt; samplesleft >=10; i-=(WindowSizeInt-1) , samplesleft -= (WindowSizeInt -1)){
+      for(auto i = end - WindowSizeInt; samplesleft >= 10;
+          i -= (WindowSizeInt - 1), samplesleft -= (WindowSizeInt -1 )) {
 
          //Set blocksize so that it is the right size
-         if(samplesleft < (int)WindowSizeInt){
-            blocksize = samplesleft;
-         }
-         else{
-            blocksize = WindowSizeInt;
-         }
+         const auto blocksize = limitSampleBufferSize( WindowSizeInt, samplesleft);
 
          if(!AboveThreshold(t,i,blocksize))
             {
@@ -570,21 +560,24 @@ sampleCount VoiceKey::OffBackward (WaveTrack & t, sampleCount end, sampleCount l
       }
 
       //Now, if we broke out early (samplesleft > 10), go back to the lastsubthresholdsample and look more carefully
-      if(samplesleft > 10){
+      if(samplesleft > 10) {
 
          //Calculate how many to scan through--we only have to go through (at most)
          //the first window + 1 samples--but we need another window samples to draw from.
-         samplesleft = 2*WindowSizeInt+1;
+         auto remaining = 2*WindowSizeInt+1;
 
          //To speed things up, create a local buffer to store things in, to avoid the costly t.Get();
          //Only go through the first SilentWindowSizeInt samples, and choose the first that trips the key.
-         sampleFormat *buffer = new sampleFormat[samplesleft];
-         t.Get((samplePtr)buffer, floatSample, lastsubthresholdsample-samplesleft,samplesleft);
+         float *buffer = new float[remaining];
+         t.Get((samplePtr)buffer, floatSample,
+               lastsubthresholdsample - remaining, remaining);
 
          //Initialize these trend markers atrend and ztrend.  They keep track of the
-         //up/down trends at the start and end of the evaluation window.
-         int atrend = sgn(buffer[samplesleft - 2]-buffer[samplesleft - 1]);
-         int ztrend = sgn(buffer[samplesleft - WindowSizeInt-2]-buffer[samplesleft - WindowSizeInt-2]);
+         //up/down trends at the start and end of the remaining window.
+         int atrend = sgn(buffer[remaining - 2] - buffer[remaining - 1]);
+         int ztrend =
+            sgn(buffer[remaining - WindowSizeInt - 2] -
+                buffer[remaining - WindowSizeInt - 2]);
 
          double erg=0;
          double  sc=0;
@@ -598,7 +591,8 @@ sampleCount VoiceKey::OffBackward (WaveTrack & t, sampleCount end, sampleCount l
             dc  = TestDirectionChanges(t,lastsubthresholdsample,WindowSizeInt);
 
          //Now, go through the sound again, sample by sample.
-         for(i=samplesleft-1;  i>WindowSizeInt; i--){
+         size_t i;
+         for(i = remaining - 1; i > WindowSizeInt; i--) {
 
             int tests = 0;
             int testThreshold = 0;
@@ -644,9 +638,9 @@ sampleCount VoiceKey::OffBackward (WaveTrack & t, sampleCount end, sampleCount l
 
          //When we get here, i+lastsubthresholdsample is the best guess for where the word starts
          delete [] buffer;
-         return lastsubthresholdsample - samplesleft + i;
+         return lastsubthresholdsample - remaining + i;
       }
-      else{
+      else {
          //If we failed to find anything, return the start position
          return end ;
       }
@@ -722,7 +716,8 @@ bool VoiceKey::AboveThreshold(WaveTrack & t, sampleCount start, sampleCount len)
 
 //This adjusts the threshold.  Larger values of t expand the noise region,
 //making more things be classified as noise (and requiring a stronger signal).
-void VoiceKey::AdjustThreshold(double t){
+void VoiceKey::AdjustThreshold(double t)
+{
 
    mThresholdAdjustment = t;
    mThresholdEnergy = mEnergyMean + mEnergySD * t;
@@ -734,7 +729,8 @@ void VoiceKey::AdjustThreshold(double t){
 
 
 //This 'calibrates' the voicekey to noise
-void VoiceKey::CalibrateNoise(WaveTrack & t, sampleCount start, sampleCount len){
+void VoiceKey::CalibrateNoise(WaveTrack & t, sampleCount start, sampleCount len)
+{
    //To calibrate the noise, we need to scan the sample block just like in the voicekey and
    //calculate the mean and standard deviation of the test statistics.
    //Then, we set the BaselineThreshold to be one
@@ -777,26 +773,17 @@ void VoiceKey::CalibrateNoise(WaveTrack & t, sampleCount start, sampleCount len)
 
 
    //	int n = len - WindowSizeInt;        //This is how many samples we have
-   int samplesleft = len - WindowSizeInt;
-   int i;
-   int blocksize;
+   auto samplesleft = len - WindowSizeInt;
    int samples=0;
 
-   for(i = start; samplesleft >=10 ; i += (WindowSizeInt -1), samplesleft -= (WindowSizeInt -1) )
-      {
+   for(auto i = start; samplesleft >= 10;
+       i += (WindowSizeInt - 1), samplesleft -= (WindowSizeInt -1) ) {
          //Take samples chunk-by-chunk.
          //Normally, this should be in WindowSizeInt chunks, but at the end (if there are more than 10
          //samples left) take a chunk that eats the rest of the samples.
 
          samples++;          //Increment the number of samples we have
-         if(samplesleft < (int)WindowSizeInt)
-            {
-               blocksize = samplesleft;
-            }
-         else
-            {
-               blocksize = WindowSizeInt;
-            }
+         const auto blocksize = limitSampleBufferSize( WindowSizeInt, samplesleft);
 
          erg = TestEnergy(t, i, blocksize);
          sumerg +=(double)erg;
@@ -825,13 +812,12 @@ void VoiceKey::CalibrateNoise(WaveTrack & t, sampleCount start, sampleCount len)
    /* i18n-hint: %1.4f is replaced by a number.  sd stands for 'Standard Deviations'*/
    text +=           wxString::Format(_("Energy                  -- mean: %1.4f  sd: (%1.4f)\n"),mEnergyMean,mEnergySD);
    text+=            wxString::Format(_("Sign Changes        -- mean: %1.4f  sd: (%1.4f)\n"),mSignChangesMean,mSignChangesSD);
-   text+=            wxString::Format(_("Direction Changes  -- mean: %1.4f  sd: (%1.4f)\n"),mDirectionChangesMean,mDirectionChangesSD);
-   wxMessageDialog  * stats =  new wxMessageDialog(NULL, text,
-                                                  wxT("Calibration Complete"),
-                                                  wxOK | wxICON_INFORMATION,
-                                                  wxPoint(-1,-1));
-   stats->ShowModal();
-   delete stats;
+   text += wxString::Format(_("Direction Changes  -- mean: %1.4f  sd: (%1.4f)\n"), mDirectionChangesMean, mDirectionChangesSD);
+   wxMessageDialog{ NULL, text,
+      wxT("Calibration Complete"),
+      wxOK | wxICON_INFORMATION,
+      wxPoint(-1, -1) }
+   .ShowModal();
 
    AdjustThreshold(mThresholdAdjustment);
 }
@@ -853,24 +839,21 @@ double VoiceKey::TestEnergy (WaveTrack & t, sampleCount start, sampleCount len)
 {
 
    double sum = 1;
-   sampleCount s = start;                                //Keep track of start
-   sampleCount originalLen = len;                        //Keep track of the length of block to process (its not the length of t)
-   sampleCount blockSize = t.GetMaxBlockSize();         //Determine size of sampling buffer
-
-
-   if( blockSize > len)
-      blockSize = len;
+   auto s = start;                                //Keep track of start
+   auto originalLen = len;                        //Keep track of the length of block to process (its not the length of t)
+   const auto blockSize = limitSampleBufferSize(
+      t.GetMaxBlockSize(), len);               //Determine size of sampling buffer
    float *buffer = new float[blockSize];       //Get a sampling buffer
 
    while(len > 0)
       {
-         sampleCount block = t.GetBestBlockSize(s);          //Figure out how much to grab
-         if(block > len)	block = len;                 //Don't grab too much!
+         //Figure out how much to grab
+         auto block = limitSampleBufferSize ( t.GetBestBlockSize(s), len );
 
          t.Get((samplePtr)buffer,floatSample, s,block);                      //grab the block;
 
          //Now, go through the block and calculate energy
-         for(int i = 0; i< block; i++)
+         for(decltype(block) i = 0; i< block; i++)
             {
                sum += buffer[i]*buffer[i];
             }
@@ -885,10 +868,10 @@ double VoiceKey::TestEnergy (WaveTrack & t, sampleCount start, sampleCount len)
 
 
 //This will update RMSE by adding one element and subtracting another
-void VoiceKey::TestEnergyUpdate (double & prevErg, int len, const sampleFormat & drop, const sampleFormat & add)
+void VoiceKey::TestEnergyUpdate (double & prevErg, int len, const float & drop, const float & add)
 {
    //This is an updating formula for RMSE. It will only recalculate what's changed.
-   prevErg =  prevErg + (double)(abs(add) - abs(drop))/len;
+   prevErg =  prevErg + (double)(fabs(add) - fabs(drop))/len;
 
 }
 
@@ -897,21 +880,18 @@ double VoiceKey::TestSignChanges(WaveTrack & t, sampleCount start, sampleCount l
 {
 
 
-   sampleCount s = start;                                //Keep track of start
-   sampleCount originalLen = len;                        //Keep track of the length of block to process (its not the length of t)
-   sampleCount blockSize = t.GetMaxBlockSize();         //Determine size of sampling buffer
+   auto s = start;                                //Keep track of start
+   auto originalLen = len;                        //Keep track of the length of block to process (its not the length of t)
+   const auto blockSize = limitSampleBufferSize(
+      t.GetMaxBlockSize(), len);               //Determine size of sampling buffer
    unsigned long signchanges = 1;
    int currentsign=0;
 
-
-   if( blockSize > len)
-      blockSize = len;
-   sampleFormat *buffer = new sampleFormat[blockSize];       //Get a sampling buffer
+   float *buffer = new float[blockSize];       //Get a sampling buffer
 
    while(len > 0) {
-
-      sampleCount block = t.GetBestBlockSize(s);  //Figure out how much to grab
-      if(block > len)	block = len;                 //Don't grab too much!
+      //Figure out how much to grab
+      auto block = limitSampleBufferSize ( t.GetBestBlockSize(s), len );
 
       t.Get((samplePtr)buffer,floatSample, s,block);                      //grab the block;
 
@@ -923,7 +903,7 @@ double VoiceKey::TestSignChanges(WaveTrack & t, sampleCount start, sampleCount l
 
       //Now, go through the block and calculate zero crossings
 
-      for(int i = 0; i< block; i++)
+      for(decltype(block) i = 0; i< block; i++)
          {
             if( sgn(buffer[i]) != currentsign)
                {
@@ -940,10 +920,10 @@ double VoiceKey::TestSignChanges(WaveTrack & t, sampleCount start, sampleCount l
 }
 
 void VoiceKey::TestSignChangesUpdate(double & currentsignchanges, int len,
-                                     const sampleFormat & a1,
-                                     const sampleFormat & a2,
-                                     const sampleFormat & z1,
-                                     const sampleFormat & z2)
+                                     const float & a1,
+                                     const float & a2,
+                                     const float & z1,
+                                     const float & z2)
 {
 
    if(sgn(a1)!=sgn(a2)) currentsignchanges -= 1.0/len;
@@ -956,21 +936,19 @@ double VoiceKey::TestDirectionChanges(WaveTrack & t, sampleCount start, sampleCo
 {
 
 
-   sampleCount s = start;                                //Keep track of start
-   sampleCount originalLen = len;                        //Keep track of the length of block to process (its not the length of t)
-   sampleCount blockSize = t.GetMaxBlockSize();         //Determine size of sampling buffer
+   auto s = start;                                //Keep track of start
+   auto originalLen = len;                        //Keep track of the length of block to process (its not the length of t)
+   const auto blockSize = limitSampleBufferSize(
+      t.GetMaxBlockSize(), len);               //Determine size of sampling buffer
    unsigned long directionchanges = 1;
-   sampleFormat lastval=sampleFormat(0);
+   float lastval=float(0);
    int lastdirection=1;
 
-   if( blockSize > len)
-      blockSize = len;
-   sampleFormat *buffer = new sampleFormat[blockSize];       //Get a sampling buffer
+   float *buffer = new float[blockSize];       //Get a sampling buffer
 
    while(len > 0) {
-
-      sampleCount block = t.GetBestBlockSize(s);  //Figure out how much to grab
-      if(block > len)	block = len;                 //Don't grab too much!
+      //Figure out how much to grab
+      auto block = limitSampleBufferSize ( t.GetBestBlockSize(s), len );
 
       t.Get((samplePtr)buffer,floatSample, s,block);                      //grab the block;
 
@@ -982,7 +960,7 @@ double VoiceKey::TestDirectionChanges(WaveTrack & t, sampleCount start, sampleCo
       //Now, go through the block and calculate zero crossings
 
 
-      for(int i = 0; i< block; i++){
+      for(decltype(block) i = 0; i< block; i++){
 
          if( sgn(buffer[i]-lastval) != lastdirection) {
             directionchanges++;
@@ -1004,8 +982,8 @@ double VoiceKey::TestDirectionChanges(WaveTrack & t, sampleCount start, sampleCo
 // This method does an updating by looking at the trends
 // This will change currentdirections and atrend/trend, so be warned.
 void VoiceKey::TestDirectionChangesUpdate(double & currentdirectionchanges, int len,
-                                          int & atrend, const sampleFormat & a1, const sampleFormat & a2,
-                                          int & ztrend, const sampleFormat & z1, const sampleFormat & z2)
+                                          int & atrend, const float & a1, const float & a2,
+                                          int & ztrend, const float & z1, const float & z2)
 {
 
    if(sgn(a2 - a1)!= atrend ) {

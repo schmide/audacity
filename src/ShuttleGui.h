@@ -16,6 +16,7 @@
 
 #include "Audacity.h"
 
+#include "MemoryX.h"
 #include <wx/grid.h>
 #include <wx/sizer.h>
 #include <wx/string.h>
@@ -69,8 +70,7 @@ class Shuttle;
 
 class WrappedType;
 
-
-class AUDACITY_DLL_API ShuttleGuiBase
+class AUDACITY_DLL_API ShuttleGuiBase /* not final */
 {
 public:
    ShuttleGuiBase(wxWindow * pParent,teShuttleMode ShuttleMode);
@@ -256,12 +256,18 @@ public:
    void SetStretchyRow( int i );
 
 //--Some Additions since June 2007 that don't fit in elsewhere...
-   wxWindow * GetParent() {return mpParent;};
+   wxWindow * GetParent()
+   {
+      // This assertion justifies the use of safenew in many places where GetParent()
+      // is used to construct a window
+      wxASSERT(mpParent != NULL);
+      return mpParent;
+   }
    ShuttleGuiBase & Prop( int iProp );
    int GetId() {return miIdNext;};
    void UseUpId();
 
-   wxSizer * GetSizer() {return mpSizer;};
+   wxSizer * GetSizer() {return mpSizer;}
 
 protected:
    void SetProportions( int Default );
@@ -280,7 +286,7 @@ protected:
    wxSizer * pSizerStack[ nMaxNestedSizers ];
    wxString mBoxName;
 
-   Shuttle * mpShuttle; /*! Controls source/destination of shuttled data.  You can
+   std::unique_ptr<Shuttle> mpShuttle; /*! Controls source/destination of shuttled data.  You can
    leave this NULL if you are shuttling to variables */
    int miNoMatchSelector; //! Used in choices to determine which item to use on no match.
 
@@ -307,7 +313,7 @@ protected:
    // Proportion set by user rather than default.
    int miPropSetByUser;
 
-   wxSizer * mpSubSizer;
+   std::unique_ptr<wxSizer> mpSubSizer;
    wxSizer * mpSizer;
    wxWindow * mpParent;
    wxWindow * mpWind;
@@ -322,10 +328,9 @@ extern void SetIfCreated( wxTextCtrl *&Var, wxTextCtrl * Val );
 extern void SetIfCreated( wxStaticText *&Var, wxStaticText * Val );
 
 class GuiWaveTrack;
-class AdornedRulerPanel;
 class RulerPanel;
 class AttachableScrollBar;
-struct ViewInfo;
+class ViewInfo;
 #include <wx/scrolbar.h>  // to get wxSB_HORIZONTAL
 
 // CreateStdButtonSizer defs...should probably move to widgets subdir
@@ -353,12 +358,12 @@ enum
    eCloseID       = wxID_CANCEL
 };
 
-AUDACITY_DLL_API wxSizer *CreateStdButtonSizer( wxWindow *parent,
+AUDACITY_DLL_API std::unique_ptr<wxSizer> CreateStdButtonSizer( wxWindow *parent,
                                long buttons = eOkButton | eCancelButton,
                                wxWindow *extra = NULL );
 
 // ShuttleGui extends ShuttleGuiBase with Audacity specific extensions.
-class AUDACITY_DLL_API ShuttleGui : public ShuttleGuiBase
+class AUDACITY_DLL_API ShuttleGui /* not final */ : public ShuttleGuiBase
 {
 public:
    ShuttleGui(wxWindow * pParent,teShuttleMode ShuttleMode);
@@ -368,7 +373,6 @@ public:
    // Prop() sets the proportion value, defined as in wxSizer::Add().
    ShuttleGui & Prop( int iProp ){ ShuttleGuiBase::Prop(iProp); return *this;}; // Has to be here too, to return a ShuttleGui and not a ShuttleGuiBase.
    GuiWaveTrack * AddGuiWaveTrack( const wxString & Name);
-   AdornedRulerPanel * AddAdornedRuler( ViewInfo *pViewInfo );
    RulerPanel * AddRulerVertical( float low, float hi, const wxString & Units );
    AttachableScrollBar * AddAttachableScrollBar( long style = wxSB_HORIZONTAL );
    void AddStandardButtons( long buttons = eOkButton | eCancelButton, wxButton *extra = NULL );

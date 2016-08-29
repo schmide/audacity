@@ -17,7 +17,7 @@
   is considered to be a click.
 
   The structure was largely stolen from Domonic Mazzoni's NoiseRemoval
-  module, and reworked for the new effect.
+  module, and reworked for the NEW effect.
 
   This file is intended to become part of Audacity.  You may modify
   and/or distribute it under the same terms as Audacity itself.
@@ -25,6 +25,7 @@
 *//*******************************************************************/
 
 #include "../Audacity.h"
+#include "ClickRemoval.h"
 
 #include <math.h>
 
@@ -33,9 +34,10 @@
 #include <wx/valgen.h>
 
 #include "../Prefs.h"
+#include "../ShuttleGui.h"
 #include "../widgets/valnum.h"
 
-#include "ClickRemoval.h"
+#include "../WaveTrack.h"
 
 enum
 {
@@ -60,6 +62,8 @@ EffectClickRemoval::EffectClickRemoval()
 {
    mThresholdLevel = DEF_Threshold;
    mClickWidth = DEF_Width;
+
+   SetLinearEffectFlag(false);
 
    windowSize = 8192;
    sep = 2049;
@@ -158,7 +162,7 @@ bool EffectClickRemoval::Process()
    bool bGoodResult = true;
    mbDidSomething = false;
 
-   SelectedTrackListOfKindIterator iter(Track::Wave, mOutputTracks);
+   SelectedTrackListOfKindIterator iter(Track::Wave, mOutputTracks.get());
    WaveTrack *track = (WaveTrack *) iter.First();
    int count = 0;
    while (track) {
@@ -168,9 +172,9 @@ bool EffectClickRemoval::Process()
       double t1 = mT1 > trackEnd? trackEnd: mT1;
 
       if (t1 > t0) {
-         sampleCount start = track->TimeToLongSamples(t0);
-         sampleCount end = track->TimeToLongSamples(t1);
-         sampleCount len = (sampleCount)(end - start);
+         auto start = track->TimeToLongSamples(t0);
+         auto end = track->TimeToLongSamples(t1);
+         auto len = end - start;
 
          if (!ProcessOne(count, track, start, len))
          {
@@ -203,19 +207,17 @@ bool EffectClickRemoval::ProcessOne(int count, WaveTrack * track, sampleCount st
       return false;
    }
 
-   sampleCount idealBlockLen = track->GetMaxBlockSize() * 4;
+   auto idealBlockLen = track->GetMaxBlockSize() * 4;
    if (idealBlockLen % windowSize != 0)
       idealBlockLen += (windowSize - (idealBlockLen % windowSize));
 
    bool bResult = true;
-   sampleCount s = 0;
+   decltype(len) s = 0;
    float *buffer = new float[idealBlockLen];
    float *datawindow = new float[windowSize];
    while ((s < len)  &&  ((len - s) > windowSize/2))
    {
-      sampleCount block = idealBlockLen;
-      if (s + block > len)
-         block = len - s;
+      auto block = limitSampleBufferSize( idealBlockLen, len - s );
 
       track->Get((samplePtr) buffer, floatSample, start + s, block);
 
@@ -346,10 +348,7 @@ void EffectClickRemoval::PopulateOrExchange(ShuttleGui & S)
       mThreshS = S.Id(ID_Thresh).AddSlider(wxT(""), mThresholdLevel, MAX_Threshold, MIN_Threshold);
       mThreshS->SetName(_("Threshold"));
       mThreshS->SetValidator(wxGenericValidator(&mThresholdLevel));
-#if defined(__WXGTK__)
-      // Force a minimum size since wxGTK allows it to go to zero
-      mThreshS->SetMinSize(wxSize(100, -1));
-#endif
+      mThreshS->SetMinSize(wxSize(150, -1));
 
       // Click width
       IntegerValidator<int> vldWidth(&mClickWidth);
@@ -363,10 +362,7 @@ void EffectClickRemoval::PopulateOrExchange(ShuttleGui & S)
       mWidthS = S.Id(ID_Width).AddSlider(wxT(""), mClickWidth, MAX_Width, MIN_Width);
       mWidthS->SetName(_("Max Spike Width"));
       mWidthS->SetValidator(wxGenericValidator(&mClickWidth));
-#if defined(__WXGTK__)
-      // Force a minimum size since wxGTK allows it to go to zero
-      mWidthS->SetMinSize(wxSize(100, -1));
-#endif
+      mWidthS->SetMinSize(wxSize(150, -1));
    }
    S.EndMultiColumn();
 

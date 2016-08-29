@@ -23,13 +23,13 @@ wxString MessageCommandType::BuildName()
 
 void MessageCommandType::BuildSignature(CommandSignature &signature)
 {
-   Validator *stringValidator = new Validator();
-   signature.AddParameter(wxT("MessageString"), wxT(""), stringValidator);
+   auto stringValidator = make_movable<DefaultValidator>();
+   signature.AddParameter(wxT("MessageString"), wxT(""), std::move(stringValidator));
 }
 
-Command *MessageCommandType::Create(CommandOutputTarget *target)
+CommandHolder MessageCommandType::Create(std::unique_ptr<CommandOutputTarget> &&target)
 {
-   return new MessageCommand(*this, target);
+   return std::make_shared<MessageCommand>(*this, std::move(target));
 }
 
 bool MessageCommand::Apply(CommandExecutionContext WXUNUSED(context))

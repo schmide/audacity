@@ -15,10 +15,11 @@
 #include "../Audacity.h"
 #include <wx/defs.h>
 #include <wx/window.h>
+#include "wxPanelWrapper.h"
 
 class AudacityProject;
 
-class ErrorDialog : public wxDialog
+class ErrorDialog /* not final */ : public wxDialogWrapper
 {
 public:
    // constructors and destructors
@@ -41,16 +42,21 @@ private:
 };
 
 // Helper class to make browser "simulate" a modal dialog
-class HtmlTextHelpDialog : public BrowserFrame
+class HtmlTextHelpDialog final : public BrowserDialog
 {
 public:
-   HtmlTextHelpDialog() : BrowserFrame()
+   HtmlTextHelpDialog(wxWindow *pParent, const wxString &title)
+      : BrowserDialog{ pParent, title }
    {
+#if !wxCHECK_VERSION(3, 0, 0)
       MakeModal( true );
+#endif
    }
    virtual ~HtmlTextHelpDialog()
    {
+#if !wxCHECK_VERSION(3, 0, 0)
       MakeModal( false );
+#endif
       // On Windows, for some odd reason, the Audacity window will be sent to
       // the back.  So, make sure that doesn't happen.
       GetParent()->Raise();

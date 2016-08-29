@@ -14,6 +14,7 @@
 #ifndef __AUDACITY_CONTROL_TOOLBAR__
 #define __AUDACITY_CONTROL_TOOLBAR__
 
+#include "../MemoryX.h"
 #include "ToolBar.h"
 #include "../Theme.h"
 
@@ -24,6 +25,7 @@ class wxKeyEvent;
 class wxTimer;
 class wxTimerEvent;
 class wxWindow;
+class wxStatusBar;
 
 class AButton;
 class AudacityProject;
@@ -33,8 +35,11 @@ class TimeTrack;
 struct AudioIOStartStreamOptions;
 class SelectedRegion;
 
+// Defined in Project.h
+enum class PlayMode : int;
+
 // In the GUI, ControlToolBar appears as the "Transport Toolbar". "Control Toolbar" is historic.
-class ControlToolBar:public ToolBar {
+class ControlToolBar final : public ToolBar {
 
  public:
 
@@ -44,7 +49,7 @@ class ControlToolBar:public ToolBar {
    void Create(wxWindow *parent);
 
    void UpdatePrefs();
-   virtual void OnKeyEvent(wxKeyEvent & event);
+   void OnKeyEvent(wxKeyEvent & event);
 
    // msmeyer: These are public, but it's far better to
    // call the "real" interface functions like PlayCurrentRegion() and
@@ -56,12 +61,21 @@ class ControlToolBar:public ToolBar {
    void OnFF(wxCommandEvent & evt);
    void OnPause(wxCommandEvent & evt);
 
+   // Choice among the appearances of the play button:
+   enum class PlayAppearance {
+      Straight, Looped, CutPreview, Scrub, Seek
+   };
+
    //These allow buttons to be controlled externally:
-   void SetPlay(bool down, bool looped=false, bool cutPreview = false);
+   void SetPlay(bool down, PlayAppearance appearance = PlayAppearance::Straight);
    void SetStop(bool down);
    void SetRecord(bool down, bool append=false);
 
-   bool IsRecordDown();
+   bool IsPauseDown() const;
+   bool IsRecordDown() const;
+
+   // A project is only allowed to stop an audio stream that it owns.
+   bool CanStopAudioStream ();
 
    // Play currently selected region, or if nothing selected,
    // play from current cursor.
@@ -70,7 +84,9 @@ class ControlToolBar:public ToolBar {
    // Return the Audio IO token or -1 for failure
    int PlayPlayRegion(const SelectedRegion &selectedRegion,
                       const AudioIOStartStreamOptions &options,
-                      bool cutpreview = false, bool backwards = false,
+                      PlayMode playMode,
+                      PlayAppearance appearance = PlayAppearance::Straight,
+                      bool backwards = false,
                       // Allow t0 and t1 to be beyond end of tracks
                       bool playWhiteSpace = false);
    void PlayDefault();
@@ -78,12 +94,23 @@ class ControlToolBar:public ToolBar {
    // Stop playing
    void StopPlaying(bool stopStream = true);
 
-   void Populate();
-   virtual void Repaint(wxDC *dc);
-   virtual void EnableDisableButtons();
+   // Pause - used by AudioIO to pause sound activate recording
+   void Pause();
 
-   virtual void ReCreateButtons();
-   void RegenerateToolsTooltips();
+   void Populate();
+   void Repaint(wxDC *dc) override;
+   void EnableDisableButtons() override;
+
+   void ReCreateButtons() override;
+   void RegenerateTooltips() override;
+
+   int WidthForStatusBar(wxStatusBar* const);
+   void UpdateStatusBar(AudacityProject *pProject);
+
+   // Starting and stopping of scrolling display
+   void StartScrollingIfPreferred();
+   void StartScrolling();
+   void StopScrolling();
 
  private:
 
@@ -102,6 +129,7 @@ class ControlToolBar:public ToolBar {
    void SetupCutPreviewTracks(double playStart, double cutStart,
                              double cutEnd, double playEnd);
    void ClearCutPreviewTracks();
+   wxString StateForStatusBar();
 
    enum
    {
@@ -133,7 +161,13 @@ class ControlToolBar:public ToolBar {
 
    wxBoxSizer *mSizer;
 
-   TrackList* mCutPreviewTracks;
+   std::unique_ptr<TrackList> mCutPreviewTracks;
+
+   // strings for status bar
+   wxString mStatePlay;
+   wxString mStateStop;
+   wxString mStateRecord;
+   wxString mStatePause;
 
  public:
 

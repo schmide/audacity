@@ -107,13 +107,13 @@ public:
 // ExpandingToolBar
 //
 
-BEGIN_EVENT_TABLE(ExpandingToolBar, wxPanel)
+BEGIN_EVENT_TABLE(ExpandingToolBar, wxPanelWrapper)
    EVT_SIZE(ExpandingToolBar::OnSize)
    EVT_TIMER(kTimerID, ExpandingToolBar::OnTimer)
    EVT_BUTTON(kToggleButtonID, ExpandingToolBar::OnToggle)
 END_EVENT_TABLE()
 
-IMPLEMENT_CLASS(ExpandingToolBar, wxPanel)
+IMPLEMENT_CLASS(ExpandingToolBar, wxPanelWrapper)
 
 //static
 int ExpandingToolBar::msNoAutoExpandStack = 0;
@@ -122,7 +122,7 @@ ExpandingToolBar::ExpandingToolBar(wxWindow* parent,
                                    wxWindowID id,
                                    const wxPoint& pos,
                                    const wxSize& size):
-   wxPanel(parent, id, pos, size),
+   wxPanelWrapper(parent, id, pos, size),
    mIsAutoExpanded(false),
    mIsManualExpanded(false),
    mIsExpanded(false),
@@ -131,13 +131,12 @@ ExpandingToolBar::ExpandingToolBar(wxWindow* parent,
    mFrameParent(NULL),
    mDialogParent(NULL),
    mAreaParent(NULL),
-   mSavedArrangement(NULL),
-   mDragImage(NULL),
+   mSavedArrangement{},
    mTopLevelParent(NULL)
 {
-   mMainPanel = new wxPanel(this, -1,
+   mMainPanel = safenew wxPanelWrapper(this, -1,
                             wxDefaultPosition, wxSize(1, 1));
-   mExtraPanel = new wxPanel(this, -1,
+   mExtraPanel = safenew wxPanelWrapper(this, -1,
                              wxDefaultPosition, wxSize(1, 1));
 
    mGrabber = NULL;
@@ -145,14 +144,14 @@ ExpandingToolBar::ExpandingToolBar(wxWindow* parent,
    ToolBarArea *toolBarParent =
       dynamic_cast<ToolBarArea *>(GetParent());
    if (toolBarParent)
-      mGrabber = new ToolBarGrabber(this, -1, this);
+      mGrabber = safenew ToolBarGrabber(this, -1, this);
 
    /// \todo check whether this is a memory leak (and check similar code)
    wxImage hbar = theTheme.Image(bmpToolBarToggle);
    wxColour magicColor = wxColour(0, 255, 255);
    ImageArray fourStates = ImageRoll::SplitV(hbar, magicColor);
 
-   mToggleButton = new AButton(this, kToggleButtonID,
+   mToggleButton = safenew AButton(this, kToggleButtonID,
                                wxDefaultPosition, wxDefaultSize,
                                ImageRoll(ImageRoll::HorizontalRoll,
                                          fourStates[0], magicColor),
@@ -276,17 +275,21 @@ void ExpandingToolBar::TryAutoCollapse()
 #endif
 }
 
-class ExpandingToolBarEvtHandler : public wxEvtHandler
+class ExpandingToolBarEvtHandler final : public wxEvtHandler
 {
  public:
    ExpandingToolBarEvtHandler(ExpandingToolBar *toolbar,
+                              wxWindow *window,
                               wxEvtHandler *inheritedEvtHandler)
    {
       mToolBar = toolbar;
+      mWindow = window;
       mInheritedEvtHandler = inheritedEvtHandler;
-   }
 
-   virtual bool ProcessEvent(wxEvent& evt)
+      window->PushEventHandler(this);
+}
+
+   bool ProcessEvent(wxEvent& evt) override
    {
       if (mToolBar->IsCursorInWindow())
          mToolBar->TryAutoExpand();
@@ -296,8 +299,14 @@ class ExpandingToolBarEvtHandler : public wxEvtHandler
       return mInheritedEvtHandler->ProcessEvent(evt);
    }
 
+   ~ExpandingToolBarEvtHandler()
+   {
+      mWindow->RemoveEventHandler(this);
+   }
+
 protected:
    ExpandingToolBar *mToolBar;
+   wxWindow *mWindow;
    wxEvtHandler *mInheritedEvtHandler;
 
    DECLARE_NO_COPY_CLASS(ExpandingToolBarEvtHandler);
@@ -306,9 +315,8 @@ protected:
 void ExpandingToolBar::RecursivelyPushEventHandlers(wxWindow *win)
 {
    if (!mWindowHash[win]) {
-      ExpandingToolBarEvtHandler *evtHandler =
-         new ExpandingToolBarEvtHandler(this, win->GetEventHandler());
-      win->PushEventHandler(evtHandler);
+      mHandlers.push_back(make_movable<ExpandingToolBarEvtHandler>
+         (this, win, win->GetEventHandler()));
       mWindowHash[win] = 1;
    }
 
@@ -542,7 +550,7 @@ void ExpandingToolBar::StartMoving()
    ImageRoll tgtImageRoll = ImageRoll(ImageRoll::VerticalRoll,
                                       tgtImage,
                                       magicColor);
-   mTargetPanel = new ImageRollPanel(mAreaParent, -1, tgtImageRoll,
+   mTargetPanel = safenew ImageRollPanel(mAreaParent, -1, tgtImageRoll,
                                      wxDefaultPosition,
                                      wxDefaultSize,
                                      wxTRANSPARENT_WINDOW);
@@ -556,7 +564,7 @@ void ExpandingToolBar::StartMoving()
 
    mAreaParent->SetCapturedChild(this);
 
-   mDragImage = new wxDragImage(toolbarBitmap);
+   mDragImage = std::make_unique<wxDragImage>(toolbarBitmap);
    mDragImage->BeginDrag(hotSpot, mAreaParent, mTopLevelParent);
    mDragImage->Show();
    mDragImage->Move(ScreenToClient(wxGetMousePosition()));
@@ -622,7 +630,7 @@ void ExpandingToolBar::FinishMoving()
    if (!mAreaParent || !mSavedArrangement)
       return;
 
-   delete mTargetPanel;
+   // DELETE mTargetPanel; // I think this is not needed, but unreachable anyway -- PRL
 
    mAreaParent->SetCapturedChild(NULL);
 
@@ -632,13 +640,10 @@ void ExpandingToolBar::FinishMoving()
    msNoAutoExpandStack--;
 
    if (mDropTarget == kDummyRect) {
-      mAreaParent->RestoreArrangement(mSavedArrangement);
-      mSavedArrangement = NULL;
+      mAreaParent->RestoreArrangement(std::move(mSavedArrangement));
    }
    else {
-      delete mSavedArrangement;
-      mSavedArrangement = NULL;
-
+      mSavedArrangement.reset();
       mAreaParent->MoveChild(this, mDropTarget);
    }
 
@@ -655,20 +660,20 @@ void ExpandingToolBar::FinishMoving()
 // ToolBarGrabber
 //
 
-BEGIN_EVENT_TABLE(ToolBarGrabber, wxPanel)
+BEGIN_EVENT_TABLE(ToolBarGrabber, wxPanelWrapper)
    EVT_PAINT(ToolBarGrabber::OnPaint)
    EVT_SIZE(ToolBarGrabber::OnSize)
    EVT_MOUSE_EVENTS(ToolBarGrabber::OnMouse)
 END_EVENT_TABLE()
 
-IMPLEMENT_CLASS(ToolBarGrabber, wxPanel)
+IMPLEMENT_CLASS(ToolBarGrabber, wxPanelWrapper)
 
 ToolBarGrabber::ToolBarGrabber(wxWindow *parent,
                                wxWindowID id,
                                ExpandingToolBar *ownerToolbar,
                                const wxPoint& pos,
                                const wxSize& size):
-   wxPanel(parent, id, pos, size),
+   wxPanelWrapper(parent, id, pos, size),
    mOwnerToolBar(ownerToolbar)
 {
    wxImage grabberImages = theTheme.Image(bmpToolBarGrabber);
@@ -731,16 +736,16 @@ void ToolBarGrabber::OnSize(wxSizeEvent & WXUNUSED(event))
 // ToolBarDialog
 //
 
-BEGIN_EVENT_TABLE(ToolBarDialog, wxDialog)
+BEGIN_EVENT_TABLE(ToolBarDialog, wxDialogWrapper)
 END_EVENT_TABLE()
 
-IMPLEMENT_CLASS(ToolBarDialog, wxDialog)
+IMPLEMENT_CLASS(ToolBarDialog, wxDialogWrapper)
 
 ToolBarDialog::ToolBarDialog(wxWindow* parent,
                            wxWindowID id,
                            const wxString& name,
                            const wxPoint& pos):
-   wxDialog(parent, id, name, pos, wxSize(1, 1),
+   wxDialogWrapper(parent, id, name, pos, wxSize(1, 1),
 // Workaround for bug in __WXMSW__.  No close box on a wxDialog unless wxSYSTEM_MENU is used.
 #ifdef __WXMSW__
       wxSYSTEM_MENU |
@@ -835,18 +840,18 @@ void ToolBarFrame::Fit()
 // ToolBarArea
 //
 
-BEGIN_EVENT_TABLE(ToolBarArea, wxPanel)
+BEGIN_EVENT_TABLE(ToolBarArea, wxPanelWrapper)
    EVT_SIZE(ToolBarArea::OnSize)
    EVT_MOUSE_EVENTS(ToolBarArea::OnMouse)
 END_EVENT_TABLE()
 
-IMPLEMENT_CLASS(ToolBarArea, wxPanel)
+IMPLEMENT_CLASS(ToolBarArea, wxPanelWrapper)
 
 ToolBarArea::ToolBarArea(wxWindow* parent,
                          wxWindowID id,
                          const wxPoint& pos,
                          const wxSize& size):
-   wxPanel(parent, id, pos, size),
+   wxPanelWrapper(parent, id, pos, size),
    mInOnSize(false),
    mCapturedChild(NULL)
 {
@@ -1182,9 +1187,9 @@ void ToolBarArea::RemoveChild(ExpandingToolBar *child)
    }
 }
 
-ToolBarArrangement *ToolBarArea::SaveArrangement()
+std::unique_ptr<ToolBarArrangement> ToolBarArea::SaveArrangement()
 {
-   ToolBarArrangement *arrangement = new ToolBarArrangement();
+   auto arrangement = std::make_unique<ToolBarArrangement>();
    int i;
 
    arrangement->childArray = mChildArray;
@@ -1196,7 +1201,7 @@ ToolBarArrangement *ToolBarArea::SaveArrangement()
    return arrangement;
 }
 
-void ToolBarArea::RestoreArrangement(ToolBarArrangement *arrangement)
+void ToolBarArea::RestoreArrangement(std::unique_ptr<ToolBarArrangement>&& arrangement)
 {
    int i;
 
@@ -1210,7 +1215,7 @@ void ToolBarArea::RestoreArrangement(ToolBarArrangement *arrangement)
 
    Fit(false, true);
 
-   delete arrangement;
+   arrangement.reset();
 }
 
 wxArrayRect ToolBarArea::GetDropTargets()

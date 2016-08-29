@@ -25,7 +25,6 @@
 #include  <wx/menuitem.h>
 #include  <wx/checklst.h>
 
-#include "ShuttleGui.h"
 #include "BatchCommands.h"
 
 class wxWindow;
@@ -37,8 +36,9 @@ class wxRadioButton;
 class wxListCtrl;
 class wxListEvent;
 class wxButton;
+class ShuttleGui;
 
-class BatchProcessDialog:public wxDialog {
+class BatchProcessDialog final : public wxDialogWrapper {
  public:
    // constructors and destructors
    BatchProcessDialog(wxWindow * parent);
@@ -62,7 +62,7 @@ class BatchProcessDialog:public wxDialog {
    DECLARE_EVENT_TABLE()
 };
 
-class EditChainsDialog:public wxDialog
+class EditChainsDialog final : public wxDialogWrapper
 {
 public:
    EditChainsDialog(wxWindow * parent);

@@ -23,6 +23,7 @@ they are kept separate to make things simpler.
 #ifndef __COMMANDDIRECTORY__
 #define __COMMANDDIRECTORY__
 
+#include "../MemoryX.h"
 #include "CommandMisc.h"
 #include "CommandType.h"
 
@@ -32,10 +33,9 @@ class CommandOutputTarget;
 class CommandDirectory
 {
 private:
-   static CommandDirectory *mInstance;
+   static std::unique_ptr<CommandDirectory> mInstance;
    CommandMap mCmdMap;
 public:
-   CommandDirectory();
    ~CommandDirectory();
 
    /// If a command with the given name has been registered in the directory,
@@ -44,13 +44,13 @@ public:
    CommandType *LookUp(const wxString &cmdName) const;
 
    /// Register a type of command with the directory.
-   void AddCommand(CommandType *type);
+   void AddCommand(movable_ptr<CommandType> &&type);
 
    /// Get a pointer to the singleton instance
    static CommandDirectory *Get();
 
-   /// Manually delete the singleton instance
-   static void Destroy();
+private:
+   CommandDirectory();
 };
 
 #endif /* End of include guard: __COMMANDDIRECTORY__ */

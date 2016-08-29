@@ -19,6 +19,7 @@
 *//*******************************************************************/
 
 #include "../Audacity.h"
+#include "Amplify.h"
 
 #include <math.h>
 #include <float.h>
@@ -30,11 +31,12 @@
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
 #include <wx/valtext.h>
+#include <wx/log.h>
 
+#include "../ShuttleGui.h"
 #include "../WaveTrack.h"
 #include "../widgets/valnum.h"
 
-#include "Amplify.h"
 
 enum
 {
@@ -63,10 +65,12 @@ END_EVENT_TABLE()
 EffectAmplify::EffectAmplify()
 {
    mAmp = DEF_Amp;
-   mRatio = powf(10.0f, mAmp / 20.0f);
+   mRatio = DB_TO_LINEAR(mAmp);
+   mRatioClip = 0.0;
    mCanClip = false;
-   mPeak = 0.0f;
-   mTracksAnalyzed = false;
+   mPeak = 0.0;
+
+   SetLinearEffectFlag(true);
 }
 
 EffectAmplify::~EffectAmplify()
@@ -107,7 +111,7 @@ int EffectAmplify::GetAudioOutCount()
 
 sampleCount EffectAmplify::ProcessBlock(float **inBlock, float **outBlock, sampleCount blockLen)
 {
-   for (sampleCount i = 0; i < blockLen; i++)
+   for (decltype(blockLen) i = 0; i < blockLen; i++)
    {
       outBlock[0][i] = inBlock[0][i] * mRatio;
    }
@@ -131,45 +135,71 @@ bool EffectAmplify::SetAutomationParameters(EffectAutomationParameters & parms)
    return true;
 }
 
+bool EffectAmplify::LoadFactoryDefaults()
+{
+   Init();
+
+   mRatioClip = 0.0;
+   if (mPeak > 0.0)
+   {
+      mRatio = 1.0 / mPeak;
+      mRatioClip = mRatio;
+   }
+   else
+   {
+      mRatio = 1.0;
+   }
+   mCanClip = false;
+
+   return TransferDataToWindow();
+}
+
 // Effect implementation
 
 bool EffectAmplify::Init()
 {
-   if (!mTracksAnalyzed)
+   mPeak = 0.0;
+
+   SelectedTrackListOfKindIterator iter(Track::Wave, mTracks);
+
+   for (Track *t = iter.First(); t; t = iter.Next())
    {
-      mPeak = 0.0f;
+      float min, max;
+      ((WaveTrack *)t)->GetMinMax(&min, &max, mT0, mT1);
+      float newpeak = (fabs(min) > fabs(max) ? fabs(min) : fabs(max));
 
-      SelectedTrackListOfKindIterator iter(Track::Wave, mTracks);
-
-      for (Track *t = iter.First(); t; t = iter.Next())
+      if (newpeak > mPeak)
       {
-         float min, max;
-         ((WaveTrack *)t)->GetMinMax(&min, &max, mT0, mT1);
-         float newpeak = (fabs(min) > fabs(max) ? fabs(min) : fabs(max));
-
-         if (newpeak > mPeak)
-         {
-            mPeak = newpeak;
-         }
+         mPeak = newpeak;
       }
-
-      mTracksAnalyzed = true;
    }
 
    return true;
+}
+
+void EffectAmplify::Preview(bool dryOnly)
+{
+   double ratio = mRatio;
+   double peak = mPeak;
+
+   Effect::Preview(dryOnly);
+
+   mRatio = ratio;
+   mPeak = peak;
 }
 
 void EffectAmplify::PopulateOrExchange(ShuttleGui & S)
 {
    if (IsBatchProcessing())
    {
-      mPeak = 1.0f;
+      mPeak = 1.0;
    }
    else 
    {
       if (mPeak > 0.0)
       {
-         mRatio = 1.0f / mPeak;
+         mRatio = 1.0 / mPeak;
+         mRatioClip = mRatio;
       }
       else
       {
@@ -177,15 +207,15 @@ void EffectAmplify::PopulateOrExchange(ShuttleGui & S)
       }
    }
 
-
    S.AddSpace(0, 5);
 
    S.StartVerticalLay(0);
    {
+      int precission = 3; // allow (a generous) 3 decimal  places for Amplification (dB)
       // Amplitude
       S.StartMultiColumn(2, wxCENTER);
       {
-         FloatingPointValidator<float> vldAmp(1, &mAmp);
+         FloatingPointValidator<double> vldAmp(precission, &mAmp, NUM_VAL_ONE_TRAILING_ZERO);
          vldAmp.SetRange(MIN_Amp, MAX_Amp);
          mAmpT = S.Id(ID_Amp).AddTextBox(_("Amplification (dB):"), wxT(""), 12);
          mAmpT->SetValidator(vldAmp);
@@ -201,12 +231,19 @@ void EffectAmplify::PopulateOrExchange(ShuttleGui & S)
       }
       S.EndHorizontalLay();
 
-      // Peek
+      // Peak
       S.StartMultiColumn(2, wxCENTER);
       {
-         FloatingPointValidator<float> vldNewPeak(1, &mNewPeak);
-         vldNewPeak.SetRange(20.0f * log10f(powf(10.0f, MIN_Amp / 20.0f) * mPeak),
-                             20.0f * log10f(powf(10.0f, MAX_Amp / 20.0f) * mPeak));
+         // One extra decimal place so that rounding is visible to user (see: bug 958)
+         FloatingPointValidator<double> vldNewPeak(precission + 1, &mNewPeak, NUM_VAL_ONE_TRAILING_ZERO);
+         double minAmp = MIN_Amp + LINEAR_TO_DB(mPeak);
+         double maxAmp = MAX_Amp + LINEAR_TO_DB(mPeak);
+
+         // min and max need same precision as what we're validating (bug 963)
+         minAmp = Internat::CompatibleToDouble(Internat::ToString(minAmp, precission));
+         maxAmp = Internat::CompatibleToDouble(Internat::ToString(maxAmp, precission));
+
+         vldNewPeak.SetRange(minAmp, maxAmp);
          mNewPeakT = S.Id(ID_Peak).AddTextBox(_("New Peak Amplitude (dB):"), wxT(""), 12);
          mNewPeakT->SetValidator(vldNewPeak);
       }
@@ -232,17 +269,17 @@ void EffectAmplify::PopulateOrExchange(ShuttleGui & S)
 bool EffectAmplify::TransferDataToWindow()
 {
    // limit range of gain
-   float dBInit = 20.0f*log10f(mRatio);
-   float dB = TrapFloat(dBInit, MIN_Amp, MAX_Amp);
+   double dBInit = LINEAR_TO_DB(mRatio);
+   double dB = TrapDouble(dBInit, MIN_Amp, MAX_Amp);
    if (dB != dBInit)
-      mRatio = powf(10.0f, dB / 20.0f);
+      mRatio = DB_TO_LINEAR(dB);
 
-   mAmp = 20.0f * log10f(mRatio);
+   mAmp = LINEAR_TO_DB(mRatio);
    mAmpT->GetValidator()->TransferToWindow();
 
    mAmpS->SetValue((int) (mAmp * SCL_Amp + 0.5f));
 
-   mNewPeak = 20.0f * log10f(mRatio * mPeak);
+   mNewPeak = LINEAR_TO_DB(mRatio * mPeak);
    mNewPeakT->GetValidator()->TransferToWindow();
 
    mClip->SetValue(mCanClip);
@@ -259,13 +296,13 @@ bool EffectAmplify::TransferDataFromWindow()
       return false;
    }
 
-   mRatio = powf(10.0f, TrapFloat(mAmp * SCL_Amp, MIN_Amp * SCL_Amp, MAX_Amp * SCL_Amp) / (20.0f * SCL_Amp));
+   mRatio = DB_TO_LINEAR(TrapDouble(mAmp * SCL_Amp, MIN_Amp * SCL_Amp, MAX_Amp * SCL_Amp) / SCL_Amp);
 
    mCanClip = mClip->GetValue();
 
-   if (!mCanClip && mRatio * mPeak > 1.0f)
+   if (!mCanClip && mRatio * mPeak > 1.0)
    {
-      mRatio = 1.0f / mPeak;
+      mRatio = 1.0 / mPeak;
    }
 
    return true;
@@ -275,7 +312,7 @@ bool EffectAmplify::TransferDataFromWindow()
 
 void EffectAmplify::CheckClip()
 {
-   EnableApply(mClip->GetValue() || (mPeak > 0.0f && mRatio <= 1.0f/mPeak));
+   EnableApply(mClip->GetValue() || (mPeak > 0.0 && mRatio <= mRatioClip));
 }
 
 void EffectAmplify::OnAmpText(wxCommandEvent & WXUNUSED(evt))
@@ -286,11 +323,11 @@ void EffectAmplify::OnAmpText(wxCommandEvent & WXUNUSED(evt))
       return;
    }
 
-   mRatio = powf(10.0f, TrapFloat(mAmp * SCL_Amp, MIN_Amp * SCL_Amp, MAX_Amp * SCL_Amp) / (20.0f * SCL_Amp));
+   mRatio = DB_TO_LINEAR(TrapDouble(mAmp * SCL_Amp, MIN_Amp * SCL_Amp, MAX_Amp * SCL_Amp) / SCL_Amp);
 
-   mAmpS->SetValue((int) (20.0f * log10f(mRatio) * SCL_Amp + 0.5f));
+   mAmpS->SetValue((int) (LINEAR_TO_DB(mRatio) * SCL_Amp + 0.5));
 
-   mNewPeak = 20.0f * log10f(mRatio * mPeak);
+   mNewPeak = LINEAR_TO_DB(mRatio * mPeak);
    mNewPeakT->GetValidator()->TransferToWindow();
 
    CheckClip();
@@ -304,12 +341,15 @@ void EffectAmplify::OnPeakText(wxCommandEvent & WXUNUSED(evt))
       return;
    }
 
-   mRatio = powf(10.0f, mNewPeak / 20.0f) / mPeak;
+   if (mNewPeak == 0.0)
+      mRatio = mRatioClip;
+   else
+      mRatio = DB_TO_LINEAR(mNewPeak) / mPeak;
 
-   float ampInit = 20.0f * log10f(mRatio);
-   mAmp = TrapFloat(ampInit, MIN_Amp, MAX_Amp);
+   double ampInit = LINEAR_TO_DB(mRatio);
+   mAmp = TrapDouble(ampInit, MIN_Amp, MAX_Amp);
    if (mAmp != ampInit)
-      mRatio = powf(10.0f, mAmp / 20.0f);
+      mRatio = DB_TO_LINEAR(mAmp);
 
    mAmpT->GetValidator()->TransferToWindow();
 
@@ -320,21 +360,21 @@ void EffectAmplify::OnPeakText(wxCommandEvent & WXUNUSED(evt))
 
 void EffectAmplify::OnAmpSlider(wxCommandEvent & evt)
 {
-   float dB = evt.GetInt() / SCL_Amp;
-   mRatio = powf(10.0f, TrapFloat(dB, MIN_Amp, MAX_Amp) / 20.0f);
+   double dB = evt.GetInt() / SCL_Amp;
+   mRatio = DB_TO_LINEAR(TrapDouble(dB, MIN_Amp, MAX_Amp));
 
-   float dB2 = (evt.GetInt() - 1) / SCL_Amp;
-   float ratio2 = powf(10.0f, TrapFloat(dB2, MIN_Amp, MAX_Amp) / 20.0f);
+   double dB2 = (evt.GetInt() - 1) / SCL_Amp;
+   double ratio2 = DB_TO_LINEAR(TrapDouble(dB2, MIN_Amp, MAX_Amp));
 
-   if (!mClip->GetValue() && mRatio * mPeak > 1.0f && ratio2 * mPeak < 1.0f)
+   if (!mClip->GetValue() && mRatio * mPeak > 1.0 && ratio2 * mPeak < 1.0)
    {
       mRatio = 1.0 / mPeak;
    }
 
-   mAmp = 20.0f * log10f(mRatio);
+   mAmp = LINEAR_TO_DB(mRatio);
    mAmpT->GetValidator()->TransferToWindow();
 
-   mNewPeak = 20.0f * log10f(mRatio * mPeak);
+   mNewPeak = LINEAR_TO_DB(mRatio * mPeak);
    mNewPeakT->GetValidator()->TransferToWindow();
 
    CheckClip();

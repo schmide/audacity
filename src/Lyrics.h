@@ -15,8 +15,10 @@
 #include "Audacity.h"
 
 #include <wx/dynarray.h>
-#include <wx/panel.h>
 #include <wx/textctrl.h>
+#include "widgets/wxPanelWrapper.h"
+
+class LabelTrack;
 
 
 #define LYRICS_DEFAULT_WIDTH 608
@@ -38,7 +40,7 @@ WX_DECLARE_OBJARRAY(Syllable, SyllableArray);
 class Lyrics;
 
 // Override wxTextCtrl to handle selection events, which the parent ignores if the control is read-only.
-class HighlightTextCtrl : public wxTextCtrl
+class HighlightTextCtrl final : public wxTextCtrl
 {
 public:
    HighlightTextCtrl(Lyrics* parent,
@@ -56,7 +58,7 @@ private:
    DECLARE_EVENT_TABLE()
 };
 
-class Lyrics : public wxPanel
+class Lyrics final : public wxPanelWrapper
 {
    DECLARE_DYNAMIC_CLASS(Lyrics)
 
@@ -73,7 +75,7 @@ class Lyrics : public wxPanel
    virtual ~Lyrics();
 
    void Clear();
-   void Add(double t, wxString syllable);
+   void AddLabels(const LabelTrack *pLT);
    void Finish(double finalT);
 
    int FindSyllable(long startChar); // Find the syllable whose char0 <= startChar <= char1.
@@ -90,6 +92,7 @@ class Lyrics : public wxPanel
    // Event handlers
    //
    void OnKeyEvent(wxKeyEvent & event);
+   void DoPaint(wxDC &dc);
    void OnPaint(wxPaintEvent &evt);
    void OnSize(wxSizeEvent &evt);
 
@@ -103,6 +106,8 @@ class Lyrics : public wxPanel
    void HandleLayout();
 
 private:
+   void Add(double t, const wxString &syllable, wxString &highlightText);
+
    unsigned int GetDefaultFontSize() const; // Depends on mLyricsStyle. Call only after mLyricsStyle is set.
 
    void SetDrawnFont(wxDC *dc); // for kBouncingBallLyrics

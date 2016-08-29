@@ -19,24 +19,23 @@
 *//********************************************************************/
 
 #include "Audacity.h"
+#include "SoundActivatedRecord.h"
 
-#include <wx/dialog.h>
-
-#include "Envelope.h"
 #include "ShuttleGui.h"
 #include "ShuttlePrefs.h"
 #include "Prefs.h"
-#include "SoundActivatedRecord.h"
+#include "prefs/GUISettings.h"
 
-BEGIN_EVENT_TABLE(SoundActivatedRecord, wxDialog)
+BEGIN_EVENT_TABLE(SoundActivatedRecord, wxDialogWrapper)
    EVT_BUTTON(wxID_OK, SoundActivatedRecord::OnOK)
 END_EVENT_TABLE()
 
 SoundActivatedRecord::SoundActivatedRecord(wxWindow* parent)
-: wxDialog(parent, -1, _("Sound Activated Record"), wxDefaultPosition,
+: wxDialogWrapper(parent, -1, _("Sound Activated Record"), wxDefaultPosition,
            wxDefaultSize, wxCAPTION )
 //           wxDefaultSize, wxCAPTION | wxTHICK_FRAME)
 {
+   SetName(GetTitle());
    ShuttleGui S(this, eIsCreatingFromPrefs);
    PopulateOrExchange(S);
    Fit();
@@ -56,7 +55,7 @@ void SoundActivatedRecord::PopulateOrExchange(ShuttleGui & S)
    {
       S.StartMultiColumn(2, wxEXPAND);
          S.SetStretchyCol(1);
-         dBRange = gPrefs->Read(wxT("/GUI/EnvdBRange"), ENV_DB_RANGE);
+         dBRange = gPrefs->Read(ENV_DB_KEY, ENV_DB_RANGE);
          S.TieSlider(_("Activation level (dB):"), wxT("/AudioIO/SilenceLevel"), -50, 0, -dBRange);
       S.EndMultiColumn();
    }
@@ -68,6 +67,9 @@ void SoundActivatedRecord::OnOK(wxCommandEvent & WXUNUSED(event))
 {
    ShuttleGui S( this, eIsSavingToPrefs );
    PopulateOrExchange( S );
+
+   gPrefs->Flush();
+
    EndModal(0);
 }
 

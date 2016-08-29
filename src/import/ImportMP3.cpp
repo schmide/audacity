@@ -26,6 +26,9 @@
 
 *//*******************************************************************/
 
+#include "../Audacity.h"
+#include "ImportMP3.h"
+
 // For compilers that support precompilation, includes "wx/wx.h".
 #include <wx/wxprec.h>
 
@@ -35,11 +38,9 @@
 
 #include <wx/defs.h>
 #include <wx/intl.h>
-#include "../Audacity.h"
 
 #include "../Prefs.h"
 #include "Import.h"
-#include "ImportMP3.h"
 #include "ImportPlugin.h"
 #include "../Internat.h"
 #include "../Tags.h"
@@ -55,13 +56,13 @@ static const wxChar *exts[] =
 
 #ifndef USE_LIBMAD
 
-void GetMP3ImportPlugin(ImportPluginList *importPluginList,
-                        UnusableImportPluginList *unusableImportPluginList)
+void GetMP3ImportPlugin(ImportPluginList &importPluginList,
+                        UnusableImportPluginList &unusableImportPluginList)
 {
-   UnusableImportPlugin* mp3IsUnsupported =
-      new UnusableImportPlugin(DESC, wxArrayString(WXSIZEOF(exts), exts));
-
-   unusableImportPluginList->Append(mp3IsUnsupported);
+   unusableImportPluginList.push_back(
+      make_movable<UnusableImportPlugin>
+         (DESC, wxArrayString(WXSIZEOF(exts), exts))
+  );
 }
 
 #else /* USE_LIBMAD */
@@ -95,14 +96,14 @@ struct private_data {
    wxFile *file;            /* the file containing the mp3 data we're feeding the encoder */
    unsigned char *inputBuffer;
    TrackFactory *trackFactory;
-   WaveTrack **channels;
+   TrackHolders channels;
    ProgressDialog *progress;
    int numChannels;
    int updateResult;
    bool id3checked;
 };
 
-class MP3ImportPlugin : public ImportPlugin
+class MP3ImportPlugin final : public ImportPlugin
 {
 public:
    MP3ImportPlugin():
@@ -114,15 +115,15 @@ public:
 
    wxString GetPluginStringID() { return wxT("libmad"); }
    wxString GetPluginFormatDescription();
-   ImportFileHandle *Open(wxString Filename);
+   std::unique_ptr<ImportFileHandle> Open(const wxString &Filename) override;
 };
 
-class MP3ImportFileHandle : public ImportFileHandle
+class MP3ImportFileHandle final : public ImportFileHandle
 {
 public:
-   MP3ImportFileHandle(wxFile *file, wxString filename):
+   MP3ImportFileHandle(std::unique_ptr<wxFile> &&file, wxString filename):
       ImportFileHandle(filename),
-      mFile(file)
+      mFile(std::move(file))
    {
    }
 
@@ -130,28 +131,32 @@ public:
 
    wxString GetFileDescription();
    int GetFileUncompressedBytes();
-   int Import(TrackFactory *trackFactory, Track ***outTracks,
-              int *outNumTracks, Tags *tags);
+   int Import(TrackFactory *trackFactory, TrackHolders &outTracks,
+              Tags *tags) override;
 
    wxInt32 GetStreamCount(){ return 1; }
 
-   wxArrayString *GetStreamInfo(){ return NULL; }
+   const wxArrayString &GetStreamInfo() override
+   {
+      static wxArrayString empty;
+      return empty;
+   }
 
    void SetStreamUsage(wxInt32 WXUNUSED(StreamID), bool WXUNUSED(Use)){}
 
 private:
    void ImportID3(Tags *tags);
 
-   wxFile *mFile;
+   std::unique_ptr<wxFile> mFile;
    void *mUserData;
    struct private_data mPrivateData;
    mad_decoder mDecoder;
 };
 
-void GetMP3ImportPlugin(ImportPluginList *importPluginList,
-                        UnusableImportPluginList * WXUNUSED(unusableImportPluginList))
+void GetMP3ImportPlugin(ImportPluginList &importPluginList,
+                        UnusableImportPluginList & WXUNUSED(unusableImportPluginList))
 {
-   importPluginList->Append(new MP3ImportPlugin);
+   importPluginList.push_back( make_movable<MP3ImportPlugin>() );
 }
 
 /* The MAD callbacks */
@@ -176,19 +181,17 @@ wxString MP3ImportPlugin::GetPluginFormatDescription()
    return DESC;
 }
 
-ImportFileHandle *MP3ImportPlugin::Open(wxString Filename)
+std::unique_ptr<ImportFileHandle> MP3ImportPlugin::Open(const wxString &Filename)
 {
-   wxFile *file = new wxFile(Filename);
+   auto file = std::make_unique<wxFile>(Filename);
 
-   if (!file->IsOpened()) {
-      delete file;
-      return NULL;
-   }
+   if (!file->IsOpened())
+      return nullptr;
 
    /* There's no way to tell if this is a valid mp3 file before actually
     * decoding, so we return a valid FileHandle. */
 
-   return new MP3ImportFileHandle(file, Filename);
+   return std::make_unique<MP3ImportFileHandle>(std::move(file), Filename);
 }
 
 wxString MP3ImportFileHandle::GetFileDescription()
@@ -202,19 +205,18 @@ int MP3ImportFileHandle::GetFileUncompressedBytes()
    return 0;
 }
 
-int MP3ImportFileHandle::Import(TrackFactory *trackFactory, Track ***outTracks,
-                                int *outNumTracks, Tags *tags)
+int MP3ImportFileHandle::Import(TrackFactory *trackFactory, TrackHolders &outTracks,
+                                Tags *tags)
 {
-   int chn;
+   outTracks.clear();
 
    CreateProgress();
 
    /* Prepare decoder data, initialize decoder */
 
-   mPrivateData.file        = mFile;
+   mPrivateData.file        = mFile.get();
    mPrivateData.inputBuffer = new unsigned char [INPUT_BUFFER_SIZE];
-   mPrivateData.progress    = mProgress;
-   mPrivateData.channels    = NULL;
+   mPrivateData.progress    = mProgress.get();
    mPrivateData.updateResult= eProgressSuccess;
    mPrivateData.id3checked  = false;
    mPrivateData.numChannels = 0;
@@ -236,13 +238,6 @@ int MP3ImportFileHandle::Import(TrackFactory *trackFactory, Track ***outTracks,
    if (!res) {
       /* failure */
       /* printf("failure\n"); */
-
-      /* delete everything */
-      for (chn = 0; chn < mPrivateData.numChannels; chn++) {
-         delete mPrivateData.channels[chn];
-      }
-      delete[] mPrivateData.channels;
-
       return (mPrivateData.updateResult);
    }
 
@@ -251,28 +246,19 @@ int MP3ImportFileHandle::Import(TrackFactory *trackFactory, Track ***outTracks,
 
       /* copy the WaveTrack pointers into the Track pointer list that
        * we are expected to fill */
-   *outNumTracks = mPrivateData.numChannels;
-      *outTracks = new Track* [mPrivateData.numChannels];
-      for(chn = 0; chn < mPrivateData.numChannels; chn++) {
-         mPrivateData.channels[chn]->Flush();
-         (*outTracks)[chn] = mPrivateData.channels[chn];
-      }
-      delete[] mPrivateData.channels;
+   for(const auto &channel : mPrivateData.channels) {
+      channel->Flush();
+   }
+   outTracks.swap(mPrivateData.channels);
 
    /* Read in any metadata */
    ImportID3(tags);
 
-      return mPrivateData.updateResult;
-   }
+   return mPrivateData.updateResult;
+}
 
 MP3ImportFileHandle::~MP3ImportFileHandle()
 {
-   if(mFile) {
-      if (mFile->IsOpened()) {
-         mFile->Close();
-      }
-      delete mFile;
-   }
 }
 
 void MP3ImportFileHandle::ImportID3(Tags *tags)
@@ -441,7 +427,7 @@ enum mad_flow input_cb(void *_data, struct mad_stream *stream)
     *  your existing buffer from stream.next_frame to the end.
     *
     *  This usually amounts to calling memmove() on this unconsumed portion
-    *  of the buffer and appending new data after it, before calling
+    *  of the buffer and appending NEW data after it, before calling
     *  mad_stream_buffer()"
     *           -- Rob Leslie, on the mad-dev mailing list */
 
@@ -470,34 +456,33 @@ enum mad_flow output_cb(void *_data,
                         struct mad_pcm *pcm)
 {
    int channels, samplerate;
-   sampleCount samples;
    struct private_data *data = (struct private_data *)_data;
-   int chn, smpl;
+   int smpl;
 
    samplerate= pcm->samplerate;
    channels  = pcm->channels;
-   samples   = pcm->length;
+   const auto samples   = pcm->length;
 
    /* If this is the first run, we need to create the WaveTracks that
     * will hold the data.  We do this now because now is the first
     * moment when we know how many channels there are. */
 
-   if(!data->channels) {
-      data->channels = new WaveTrack* [channels];
+   if(data->channels.empty()) {
+      data->channels.resize(channels);
 
       sampleFormat format = (sampleFormat) gPrefs->
          Read(wxT("/SamplingRate/DefaultProjectSampleFormat"), floatSample);
 
-      for(chn = 0; chn < channels; chn++) {
-         data->channels[chn] = data->trackFactory->NewWaveTrack(format, samplerate);
-         data->channels[chn]->SetChannel(Track::MonoChannel);
+      for(auto &channel: data->channels) {
+         channel = data->trackFactory->NewWaveTrack(format, samplerate);
+         channel->SetChannel(Track::MonoChannel);
       }
 
       /* special case: 2 channels is understood to be stereo */
       if(channels == 2) {
-         data->channels[0]->SetChannel(Track::LeftChannel);
-         data->channels[1]->SetChannel(Track::RightChannel);
-         data->channels[0]->SetLinked(true);
+         data->channels.begin()->get()->SetChannel(Track::LeftChannel);
+         data->channels.rbegin()->get()->SetChannel(Track::RightChannel);
+         data->channels.begin()->get()->SetLinked(true);
       }
       data->numChannels = channels;
    }
@@ -513,19 +498,20 @@ enum mad_flow output_cb(void *_data,
     * big blocks of data like this isn't a great idea, but it's temporary.
     */
    float **channelBuffers = new float* [channels];
-   for(chn = 0; chn < channels; chn++)
+   for(int chn = 0; chn < channels; chn++)
       channelBuffers[chn] = new float [samples];
 
    for(smpl = 0; smpl < samples; smpl++)
-      for(chn = 0; chn < channels; chn++)
+      for(int chn = 0; chn < channels; chn++)
          channelBuffers[chn][smpl] = scale(pcm->samples[chn][smpl]);
 
-   for(chn = 0; chn < channels; chn++)
-      data->channels[chn]->Append((samplePtr)channelBuffers[chn],
+   auto iter = data->channels.begin();
+   for (int chn = 0; chn < channels; ++iter, ++chn)
+      iter->get()->Append((samplePtr)channelBuffers[chn],
                                   floatSample,
                                   samples);
 
-   for(chn = 0; chn < channels; chn++)
+   for(int chn = 0; chn < channels; chn++)
       delete[] channelBuffers[chn];
    delete[] channelBuffers;
 

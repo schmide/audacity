@@ -15,14 +15,13 @@
 
 #include <wx/string.h>
 
-#include "../WaveTrack.h"
 #include "../widgets/NumericTextCtrl.h"
 
 #include "Generator.h"
 
 #define SILENCE_PLUGIN_SYMBOL XO("Silence")
 
-class EffectSilence : public Generator
+class EffectSilence final : public Generator
 {
 public:
    EffectSilence();
@@ -30,18 +29,18 @@ public:
 
    // IdentInterface implementation
 
-   virtual wxString GetSymbol();
-   virtual wxString GetDescription();
+   wxString GetSymbol() override;
+   wxString GetDescription() override;
 
    // EffectIdentInterface implementation
 
-   virtual EffectType GetType();
+   EffectType GetType() override;
 
    // Effect implementation
 
-   virtual void PopulateOrExchange(ShuttleGui & S);
-   virtual bool TransferDataToWindow();
-   virtual bool TransferDataFromWindow();
+   void PopulateOrExchange(ShuttleGui & S) override;
+   bool TransferDataToWindow() override;
+   bool TransferDataFromWindow() override;
 
 protected:
    // Generator implementation

@@ -15,9 +15,9 @@
 #include <wx/string.h>
 #include <wx/dynarray.h>   // sadly we are using wx dynamic arrays
 #include <wx/listctrl.h>
+#include <wx/simplebook.h>
 
 #include "Export.h"
-#include "../Track.h"
 #include "../Tags.h"       // we need to know about the Tags class for metadata
 
 class wxButton;
@@ -27,9 +27,10 @@ class wxRadioButton;
 class wxTextCtrl;
 
 class AudacityProject;
+class LabelTrack;
 class ShuttleGui;
 
-class ExportMultiple : public wxDialog
+class ExportMultiple final : public wxDialogWrapper
 {
 public:
 
@@ -52,7 +53,7 @@ private:
     * labels that define them (true), or just numbered (false).
     * @param prefix The string used to prefix the file number if files are being
     * numbered rather than named */
-   int ExportMultipleByLabel(bool byName, wxString prefix, bool addNumber);
+   int ExportMultipleByLabel(bool byName, const wxString &prefix, bool addNumber);
 
    /** \brief Export each track in the project to a separate file
     *
@@ -60,7 +61,7 @@ private:
     * (true), or just numbered (false).
     * @param prefix The string used to prefix the file number if files are being
     * numbered rather than named */
-   int ExportMultipleByTrack(bool byName, wxString prefix, bool addNumber);
+   int ExportMultipleByTrack(bool byName, const wxString &prefix, bool addNumber);
 
    /** Export one file of an export multiple set
     *
@@ -73,15 +74,15 @@ private:
     * @param tags Metadata to include in the file (if possible).
     */
    int DoExport(int channels,
-                 wxFileName name,
+                 const wxFileName &name,
                  bool selectedOnly,
                  double t0,
                  double t1,
-                 Tags tags);
+                 const Tags &tags);
    /** \brief Takes an arbitrary text string and converts it to a form that can
     * be used as a file name, if necessary prompting the user to edit the file
     * name produced */
-   wxString MakeFileName(wxString input);
+   wxString MakeFileName(const wxString &input);
    // Dialog
    void PopulateOrExchange(ShuttleGui& S);
    void EnableControls();
@@ -102,13 +103,11 @@ private:
 
 private:
    Exporter mExporter;
-   ExportPluginArray mPlugins;   /**< Array of references to available exporter
+   std::vector<ExportPlugin*> mPlugins;   /**< Array of references to available exporter
                                    plug-ins */
    AudacityProject *mProject;
    TrackList *mTracks;           /**< The list of tracks in the project that is
                                    being exported */
-   TrackListIterator mIterator;  /**< Iterator used to work through all the
-                                   tracks in the project */
    LabelTrack *mLabels;
    int mNumLabels;
    int mNumWaveTracks;
@@ -125,9 +124,6 @@ private:
 
    // List of file actually exported
    wxArrayString mExported;
-
-   /** Array of characters not allowed to be in file names on this platform */
-   wxArrayString exclude;
 
    wxChoice      *mFormat;    /**< Drop-down list of export formats
                                 (combinations of plug-in and subformat) */
@@ -161,15 +157,17 @@ private:
    wxButton      *mCancel;
    wxButton      *mExport;
 
+   wxSimplebook   *mBook;
+
    DECLARE_EVENT_TABLE()
 
 };
 
-class SuccessDialog : public wxDialog
+class SuccessDialog final : public wxDialogWrapper
 {
 public:
    SuccessDialog(wxWindow *parent, wxWindowID id, const wxString &title) :
-      wxDialog(parent, id, title, wxDefaultPosition,
+      wxDialogWrapper(parent, id, title, wxDefaultPosition,
          wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER) {};
    void OnKeyDown(wxListEvent& event); // dismisses dialog when <enter> is pressed with list control having focus
    void OnItemActivated(wxListEvent& event); // dismisses dialog when <enter> is pressed with list item having focus
@@ -177,7 +175,7 @@ private:
    DECLARE_EVENT_TABLE()
 };
 
-class MouseEvtHandler : public wxEvtHandler
+class MouseEvtHandler final : public wxEvtHandler
 {
 public:
    void OnMouse(wxMouseEvent& event);

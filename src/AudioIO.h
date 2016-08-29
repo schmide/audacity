@@ -17,22 +17,31 @@
 #include "Audacity.h"
 #include "Experimental.h"
 
+#include "MemoryX.h"
+#include <vector>
+
 #ifdef USE_MIDI
+
 #ifdef EXPERIMENTAL_MIDI_OUT
 #include "portmidi.h"
 #include "porttime.h"
 #include "allegro.h"
+
+class NoteTrack;
+using NoteTrackArray = std::vector < NoteTrack* >;
+
 #endif // EXPERIMENTAL_MIDI_OUT
+
 #endif // USE_MIDI
 
 #if USE_PORTMIXER
 #include "portmixer.h"
 #endif
 
+#include <wx/event.h>
 #include <wx/string.h>
 #include <wx/thread.h>
 
-#include "WaveTrack.h"
 #include "SampleFormat.h"
 
 class AudioIO;
@@ -44,7 +53,11 @@ class AudioThread;
 class Meter;
 class SelectedRegion;
 class TimeTrack;
-class wxDialog;
+
+class AudacityProject;
+
+class WaveTrack;
+using WaveTrackArray = std::vector < WaveTrack* >;
 
 extern AUDACITY_DLL_API AudioIO *gAudioIO;
 
@@ -64,7 +77,7 @@ class AudioIOListener;
 #define DEFAULT_LATENCY_DURATION 100.0
 #define DEFAULT_LATENCY_CORRECTION -130.0
 
-#ifdef AUTOMATED_INPUT_LEVEL_ADJUSTMENT
+#ifdef EXPERIMENTAL_AUTOMATED_INPUT_LEVEL_ADJUSTMENT
    #define AILA_DEF_TARGET_PEAK 92
    #define AILA_DEF_DELTA_PEAK 2
    #define AILA_DEF_ANALYSIS_TIME 1000
@@ -75,52 +88,39 @@ DECLARE_EXPORTED_EVENT_TYPE(AUDACITY_DLL_API, EVT_AUDIOIO_PLAYBACK, -1);
 DECLARE_EXPORTED_EVENT_TYPE(AUDACITY_DLL_API, EVT_AUDIOIO_CAPTURE, -1);
 DECLARE_EXPORTED_EVENT_TYPE(AUDACITY_DLL_API, EVT_AUDIOIO_MONITOR, -1);
 
+struct ScrubbingOptions;
+
 // To avoid growing the argument list of StartStream, add fields here
 struct AudioIOStartStreamOptions
 {
-   AudioIOStartStreamOptions()
+   explicit
+   AudioIOStartStreamOptions(double rate_)
       : timeTrack(NULL)
       , listener(NULL)
+      , rate(rate_)
       , playLooped(false)
       , cutPreviewGapStart(0.0)
       , cutPreviewGapLen(0.0)
       , pStartTime(NULL)
-#ifdef EXPERIMENTAL_SCRUBBING_SUPPORT
-      , scrubDelay(0.0)
-      , maxScrubSpeed(1.0)
-      , minScrubStutter(0.0)
-      , scrubStartClockTimeMillis(-1)
-#endif
    {}
 
    TimeTrack *timeTrack;
    AudioIOListener* listener;
+   double rate;
    bool playLooped;
    double cutPreviewGapStart;
    double cutPreviewGapLen;
    double * pStartTime;
 
 #ifdef EXPERIMENTAL_SCRUBBING_SUPPORT
-   // Positive value indicates that scrubbing will happen
+   // Non-null value indicates that scrubbing will happen
    // (do not specify a time track, looping, or recording, which
    //  are all incompatible with scrubbing):
-   double scrubDelay;
-
-   // We need a limiting value for the speed of the first scrub
-   // interval:
-   double maxScrubSpeed;
-
-   // When maximum speed scrubbing skips to follow the mouse,
-   // this is the minimum amount of playback at the maximum speed:
-   double minScrubStutter;
-
-   // Scrubbing needs the time of start of the mouse movement that began
-   // the scrub:
-   wxLongLong scrubStartClockTimeMillis;
+   ScrubbingOptions *pScrubbingOptions {};
 #endif
 };
 
-class AUDACITY_DLL_API AudioIO {
+class AUDACITY_DLL_API AudioIO final {
 
  public:
    AudioIO();
@@ -145,13 +145,12 @@ class AUDACITY_DLL_API AudioIO {
     * If successful, returns a token identifying this particular stream
     * instance.  For use with IsStreamActive() below */
 
-   int StartStream(WaveTrackArray playbackTracks, WaveTrackArray captureTracks,
+   int StartStream(const WaveTrackArray &playbackTracks, const WaveTrackArray &captureTracks,
 #ifdef EXPERIMENTAL_MIDI_OUT
-                   NoteTrackArray midiTracks,
+                   const NoteTrackArray &midiTracks,
 #endif
-                   double sampleRate, double t0, double t1,
-                   const AudioIOStartStreamOptions &options =
-                      AudioIOStartStreamOptions());
+                   double t0, double t1,
+                   const AudioIOStartStreamOptions &options);
 
    /** \brief Stop recording, playback or input monitoring.
     *
@@ -164,34 +163,23 @@ class AUDACITY_DLL_API AudioIO {
    void SeekStream(double seconds) { mSeek = seconds; }
 
 #ifdef EXPERIMENTAL_SCRUBBING_SUPPORT
-   static double GetMaxScrubSpeed() { return 32.0; } // Is five octaves enough for your amusement?
-   static double GetMinScrubSpeed() { return 0.01; }
-   /** \brief enqueue a new end time, using the last end as the new start,
+   bool IsScrubbing() { return IsBusy() && mScrubQueue != 0; }
+
+   /** \brief enqueue a NEW scrub play interval, using the last end as the NEW start,
    * to be played over the same duration, as between this and the last
    * enqueuing (or the starting of the stream).  Except, we do not exceed maximum
    * scrub speed, so may need to adjust either the start or the end.
-   * If maySkip is true, then when mouse movement exceeds maximum scrub speed,
+   * If options.adjustStart is true, then when mouse movement exceeds maximum scrub speed,
    * adjust the beginning of the scrub interval rather than the end, so that
    * the scrub skips or "stutters" to stay near the cursor.
-   * But if the "stutter" is too short for the minimum, then there is no effect
-   * on the work queue.
-   * Return true if some work was really enqueued.
+   * Return true if some sound was really enqueued.
+   * But if the "stutter" is too short for the minimum, enqueue nothing and return false.
    */
-   bool EnqueueScrubByPosition(double endTime, double maxSpeed, bool maySkip);
+   bool EnqueueScrub(double endTimeOrSpeed, const ScrubbingOptions &options);
 
-   /** \brief enqueue a new positive or negative scrubbing speed,
-   * using the last end as the new start,
-   * to be played over the same duration, as between this and the last
-   * enqueueing (or the starting of the stream).  Except, we do not exceed maximum
-   * scrub speed, so may need to adjust either the start or the end.
-   * If maySkip is true, then when mouse movement exceeds maximum scrub speed,
-   * adjust the beginning of the scrub interval rather than the end, so that
-   * the scrub skips or "stutters" to stay near the cursor.
-   * But if the "stutter" is too short for the minimum, then there is no effect
-   * on the work queue.
-   * Return true if some work was really enqueued.
+   /** \brief return the ending time of the last enqueued scrub interval.
    */
-   bool EnqueueScrubBySignedSpeed(double speed, double maxSpeed, bool maySkip);
+   double GetLastTimeInScrubQueue() const;
 #endif
 
    /** \brief  Returns true if audio i/o is busy starting, stopping, playing,
@@ -205,11 +193,12 @@ class AUDACITY_DLL_API AudioIO {
     *
     * Doesn't return true if the device has been closed but some disk i/o or
     * cleanup is still going on. If you want to know if it's safe to start a
-    * new stream, use IsBusy() */
+    * NEW stream, use IsBusy() */
    bool IsStreamActive();
    bool IsStreamActive(int token);
 
    wxLongLong GetLastPlaybackTime() const { return mLastPlaybackTimeMillis; }
+   AudacityProject *GetOwningProject() const { return mOwningProject; }
 
 #ifdef EXPERIMENTAL_MIDI_OUT
    /** \brief Compute the current PortMidi timestamp time.
@@ -361,7 +350,8 @@ class AUDACITY_DLL_API AudioIO {
    double GetStreamTime();
 
    sampleFormat GetCaptureFormat() { return mCaptureFormat; }
-   int GetNumCaptureChannels() { return mNumCaptureChannels; }
+   int GetNumPlaybackChannels() const { return mNumPlaybackChannels; }
+   int GetNumCaptureChannels() const { return mNumCaptureChannels; }
 
    /** \brief Array of common audio sample rates
     *
@@ -379,12 +369,12 @@ class AUDACITY_DLL_API AudioIO {
    /** \brief Ensure selected device names are valid
     *
     */
-   static bool ValidateDeviceNames(wxString play, wxString rec);
+   static bool ValidateDeviceNames(const wxString &play, const wxString &rec);
 
    /** \brief Function to automatically set an acceptable volume
     *
     */
-   #ifdef AUTOMATED_INPUT_LEVEL_ADJUSTMENT
+   #ifdef EXPERIMENTAL_AUTOMATED_INPUT_LEVEL_ADJUSTMENT
       void AILAInitialize();
       void AILADisable();
       bool AILAIsActive();
@@ -466,7 +456,7 @@ private:
     * and would be neater done once. If the device isn't found, return the
     * default device index.
     */
-   static int getRecordDevIndex(wxString devName = wxT(""));
+   static int getRecordDevIndex(const wxString &devName = wxEmptyString);
    /** \brief get the index of the device selected in the preferences.
     *
     * If the device isn't found, returns -1
@@ -482,7 +472,7 @@ private:
     * and would be neater done once. If the device isn't found, return the
     * default device index.
     */
-   static int getPlayDevIndex(wxString devName = wxT(""));
+   static int getPlayDevIndex(const wxString &devName = wxEmptyString);
 
    /** \brief Array of audio sample rates to try to use
     *
@@ -526,7 +516,7 @@ private:
        // begins.
 
    Alg_seq_ptr      mSeq;
-   Alg_iterator_ptr mIterator;
+   std::unique_ptr<Alg_iterator> mIterator;
    Alg_event_ptr    mNextEvent; // the next event to play (or null)
    double           mNextEventTime; // the time of the next event
                        // (note that this could be a note's time+duration)
@@ -542,7 +532,7 @@ private:
    NoteTrackArray   mMidiPlaybackTracks;
 #endif
 
-#ifdef AUTOMATED_INPUT_LEVEL_ADJUSTMENT
+#ifdef EXPERIMENTAL_AUTOMATED_INPUT_LEVEL_ADJUSTMENT
    bool           mAILAActive;
    bool           mAILAClipped;
    int            mAILATotalAnalysis;
@@ -559,9 +549,9 @@ private:
    unsigned short mAILALastChangeType;  //0 - no change, 1 - increase change, 2 - decrease change
 #endif
 
-   AudioThread        *mThread;
+   std::unique_ptr<AudioThread> mThread;
 #ifdef EXPERIMENTAL_MIDI_OUT
-   AudioThread         *mMidiThread;
+   std::unique_ptr<AudioThread> mMidiThread;
 #endif
    Resample          **mResample;
    RingBuffer        **mCaptureBuffers;
@@ -629,7 +619,7 @@ private:
    bool                mInputMixerWorks;
    float               mMixerOutputVol;
 
-   enum {
+   volatile enum {
       PLAY_STRAIGHT,
       PLAY_LOOPED,
 #ifdef EXPERIMENTAL_SCRUBBING_SUPPORT
@@ -639,8 +629,7 @@ private:
    double              mCutPreviewGapStart;
    double              mCutPreviewGapLen;
 
-   samplePtr mSilentBuf;
-   sampleCount mLastSilentBufSize;
+   GrowableSampleBuffer mSilentBuf;
 
    AudioIOListener*    mListener;
 
@@ -650,7 +639,6 @@ private:
 #endif
 
    friend void InitAudioIO();
-   friend void DeinitAudioIO();
 
    TimeTrack *mTimeTrack;
 
@@ -697,7 +685,7 @@ private:
 
 #ifdef EXPERIMENTAL_SCRUBBING_SUPPORT
    struct ScrubQueue;
-   ScrubQueue *mScrubQueue;
+   std::unique_ptr<ScrubQueue> mScrubQueue;
 
    bool mSilentScrub;
    long mScrubDuration;

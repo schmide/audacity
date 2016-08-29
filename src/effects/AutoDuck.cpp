@@ -14,6 +14,7 @@
 *******************************************************************/
 
 #include "../Audacity.h"
+#include "AutoDuck.h"
 
 #include <math.h>
 #include <float.h>
@@ -28,10 +29,11 @@
 #include "../AllThemeResources.h"
 #include "../Internat.h"
 #include "../Prefs.h"
+#include "../ShuttleGui.h"
 #include "../Theme.h"
 #include "../widgets/valnum.h"
 
-#include "AutoDuck.h"
+#include "../WaveTrack.h"
 
 // Define keys, defaults, minimums, and maximums for the effect parameters
 //
@@ -89,6 +91,8 @@ EffectAutoDuck::EffectAutoDuck()
    mOuterFadeUpLen = DEF_OuterFadeUpLen;
    mThresholdDb = DEF_ThresholdDb;
    mMaximumPause = DEF_MaximumPause;
+
+   SetLinearEffectFlag(true);
 
    mControlTrack = NULL;
 
@@ -250,16 +254,14 @@ void EffectAutoDuck::End()
 
 bool EffectAutoDuck::Process()
 {
-   sampleCount i;
-
    if (GetNumWaveTracks() == 0 || !mControlTrack)
       return false;
 
    bool cancel = false;
 
-   sampleCount start =
+   auto start =
       mControlTrack->TimeToLongSamples(mT0 + mOuterFadeDownLen);
-   sampleCount end =
+   auto end =
       mControlTrack->TimeToLongSamples(mT1 - mOuterFadeUpLen);
 
    if (end <= start)
@@ -273,10 +275,10 @@ bool EffectAutoDuck::Process()
    if (maxPause < mOuterFadeDownLen + mOuterFadeUpLen)
       maxPause = mOuterFadeDownLen + mOuterFadeUpLen;
 
-   sampleCount minSamplesPause =
+   auto minSamplesPause =
       mControlTrack->TimeToLongSamples(maxPause);
 
-   double threshold = pow(10.0, mThresholdDb/20);
+   double threshold = DB_TO_LINEAR(mThresholdDb);
 
    // adjust the threshold so we can compare it to the rmsSum value
    threshold = threshold * threshold * kRMSWindowSize;
@@ -284,7 +286,7 @@ bool EffectAutoDuck::Process()
    int rmsPos = 0;
    float rmsSum = 0;
    float *rmsWindow = new float[kRMSWindowSize];
-   for (i = 0; i < kRMSWindowSize; i++)
+   for (size_t i = 0; i < kRMSWindowSize; i++)
       rmsWindow[i] = 0;
 
    float *buf = new float[kBufSize];
@@ -298,17 +300,15 @@ bool EffectAutoDuck::Process()
    // to make the progress bar appear more natural, we first look for all
    // duck regions and apply them all at once afterwards
    AutoDuckRegionArray regions;
-   sampleCount pos = start;
+   auto pos = start;
 
    while (pos < end)
    {
-      sampleCount len = end - pos;
-      if (len > kBufSize)
-         len = kBufSize;
+      const auto len = limitSampleBufferSize( kBufSize, end - pos );
 
-      mControlTrack->Get((samplePtr)buf, floatSample, pos, (sampleCount)len);
+      mControlTrack->Get((samplePtr)buf, floatSample, pos, len);
 
-      for (i = pos; i < pos + len; i++)
+      for (auto i = pos; i < pos + len; i++)
       {
          rmsSum -= rmsWindow[rmsPos];
          rmsWindow[rmsPos] = buf[i - pos] * buf[i - pos];
@@ -380,7 +380,7 @@ bool EffectAutoDuck::Process()
    if (!cancel)
    {
       CopyInputTracks(); // Set up mOutputTracks.
-      SelectedTrackListOfKindIterator iter(Track::Wave, mOutputTracks);
+      SelectedTrackListOfKindIterator iter(Track::Wave, mOutputTracks.get());
       Track *iterTrack = iter.First();
 
       int trackNumber = 0;
@@ -391,7 +391,7 @@ bool EffectAutoDuck::Process()
 
          WaveTrack* t = (WaveTrack*)iterTrack;
 
-         for (i = 0; i < (int)regions.GetCount(); i++)
+         for (size_t i = 0; i < regions.GetCount(); i++)
          {
             const AutoDuckRegion& region = regions[i];
             if (ApplyDuckFade(trackNumber, t, region.t0, region.t1))
@@ -420,7 +420,7 @@ void EffectAutoDuck::PopulateOrExchange(ShuttleGui & S)
    {
       S.AddSpace(0, 5);
 
-      mPanel = new EffectAutoDuckPanel(S.GetParent(), this);
+      mPanel = safenew EffectAutoDuckPanel(S.GetParent(), this);
       S.AddWindow(mPanel);
 
       S.AddSpace(0, 5);
@@ -511,18 +511,18 @@ bool EffectAutoDuck::ApplyDuckFade(int trackNumber, WaveTrack* t,
 {
    bool cancel = false;
 
-   sampleCount start = t->TimeToLongSamples(t0);
-   sampleCount end = t->TimeToLongSamples(t1);
+   auto start = t->TimeToLongSamples(t0);
+   auto end = t->TimeToLongSamples(t1);
 
    float *buf = new float[kBufSize];
-   sampleCount pos = start;
+   auto pos = start;
 
-   int fadeDownSamples = t->TimeToLongSamples(
+   auto fadeDownSamples = t->TimeToLongSamples(
       mOuterFadeDownLen + mInnerFadeDownLen);
    if (fadeDownSamples < 1)
       fadeDownSamples = 1;
 
-   int fadeUpSamples = t->TimeToLongSamples(
+   auto fadeUpSamples = t->TimeToLongSamples(
       mOuterFadeUpLen + mInnerFadeUpLen);
    if (fadeUpSamples < 1)
       fadeUpSamples = 1;
@@ -532,13 +532,11 @@ bool EffectAutoDuck::ApplyDuckFade(int trackNumber, WaveTrack* t,
 
    while (pos < end)
    {
-      sampleCount len = end - pos;
-      if (len > kBufSize)
-         len = kBufSize;
+      const auto len = limitSampleBufferSize( kBufSize, end - pos );
 
       t->Get((samplePtr)buf, floatSample, pos, len);
 
-      for (sampleCount i = pos; i < pos + len; i++)
+      for (auto i = pos; i < pos + len; i++)
       {
          float gainDown = fadeDownStep * (i - start);
          float gainUp = fadeUpStep * (end - i);;
@@ -551,7 +549,7 @@ bool EffectAutoDuck::ApplyDuckFade(int trackNumber, WaveTrack* t,
          if (gain < mDuckAmountDb)
             gain = mDuckAmountDb;
 
-         buf[i - pos] *= pow(10.0, gain / 20.0);
+         buf[i - pos] *= DB_TO_LINEAR(gain);
       }
 
       t->Set((samplePtr)buf, floatSample, pos, len);
@@ -603,7 +601,7 @@ static int GetDistance(const wxPoint& first, const wxPoint& second)
       return distanceY;
 }
 
-BEGIN_EVENT_TABLE(EffectAutoDuckPanel, wxPanel)
+BEGIN_EVENT_TABLE(EffectAutoDuckPanel, wxPanelWrapper)
    EVT_PAINT(EffectAutoDuckPanel::OnPaint)
    EVT_MOUSE_CAPTURE_CHANGED(EffectAutoDuckPanel::OnMouseCaptureChanged)
    EVT_MOUSE_CAPTURE_LOST(EffectAutoDuckPanel::OnMouseCaptureLost)
@@ -613,7 +611,7 @@ BEGIN_EVENT_TABLE(EffectAutoDuckPanel, wxPanel)
 END_EVENT_TABLE()
 
 EffectAutoDuckPanel::EffectAutoDuckPanel(wxWindow *parent, EffectAutoDuck *effect)
-:  wxPanel(parent, wxID_ANY, wxDefaultPosition, wxSize(600, 300))
+:  wxPanelWrapper(parent, wxID_ANY, wxDefaultPosition, wxSize(600, 300))
 {
    mParent = parent;
    mEffect = effect;
@@ -625,8 +623,8 @@ EffectAutoDuckPanel::EffectAutoDuckPanel(wxWindow *parent, EffectAutoDuck *effec
 
 EffectAutoDuckPanel::~EffectAutoDuckPanel()
 {
-   if (mBackgroundBitmap)
-      delete mBackgroundBitmap;
+   if(HasCapture())
+      ReleaseMouse();
 }
 
 void EffectAutoDuckPanel::ResetControlPoints()
@@ -646,9 +644,7 @@ void EffectAutoDuckPanel::OnPaint(wxPaintEvent & WXUNUSED(evt))
    if (!mBackgroundBitmap || mBackgroundBitmap->GetWidth() != clientWidth ||
        mBackgroundBitmap->GetHeight() != clientHeight)
    {
-      if (mBackgroundBitmap)
-         delete mBackgroundBitmap;
-      mBackgroundBitmap = new wxBitmap(clientWidth, clientHeight);
+      mBackgroundBitmap = std::make_unique<wxBitmap>(clientWidth, clientHeight);
    }
 
    wxMemoryDC dc;
@@ -856,7 +852,8 @@ void EffectAutoDuckPanel::OnLeftDown(wxMouseEvent & evt)
       for (int i = 0; i < AUTO_DUCK_PANEL_NUM_CONTROL_POINTS; i++)
          mMoveStartControlPoints[i] = mControlPoints[i];
 
-      CaptureMouse();
+      if( !HasCapture() )
+         CaptureMouse();
    }
 }
 

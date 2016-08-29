@@ -53,16 +53,16 @@ It \TODO: description
 #include "scorealign-glue.h"
 #include "ScoreAlignDialog.h"
 
-static ScoreAlignDialog *gScoreAlignDialog = NULL;
+static std::unique_ptr<ScoreAlignDialog> gScoreAlignDialog{};
 
-//IMPLEMENT_CLASS(ScoreAlignDialog, wxDialog)
+//IMPLEMENT_CLASS(ScoreAlignDialog, wxDialogWrapper)
 
-ScoreAlignDialog::ScoreAlignDialog(wxWindow *parent, ScoreAlignParams &params)
-   : wxDialog(parent, -1, _("Align MIDI to Audio"),
+ScoreAlignDialog::ScoreAlignDialog(ScoreAlignParams &params)
+   : wxDialogWrapper(NULL, -1, _("Align MIDI to Audio"),
               wxDefaultPosition, wxDefaultSize,
               wxDEFAULT_DIALOG_STYLE)
 {
-   gScoreAlignDialog = this; // Allows anyone to close dialog by calling
+   gScoreAlignDialog.reset(this); // Allows anyone to close dialog by calling
                              // CloseScoreAlignDialog()
    gPrefs->Read(wxT("/Tracks/Synchronize/FramePeriod"), &p.mFramePeriod,
                 float(SA_DFT_FRAME_PERIOD));
@@ -81,9 +81,9 @@ ScoreAlignDialog::ScoreAlignDialog(wxWindow *parent, ScoreAlignParams &params)
    gPrefs->Read(wxT("/Tracks/Synchronize/SmoothTime"), &p.mSmoothTime,
                 float(SA_DFT_SMOOTH_TIME));
 
-   //wxButton *ok = new wxButton(this, wxID_OK, _("OK"));
-   //wxButton *cancel = new wxButton(this, wxID_CANCEL, _("Cancel"));
-   //wxSlider *sl = new wxSlider(this, ID_SLIDER, 0, 0, 100,
+   //wxButton *ok = safenew wxButton(this, wxID_OK, _("OK"));
+   //wxButton *cancel = safenew wxButton(this, wxID_CANCEL, _("Cancel"));
+   //wxSlider *sl = safenew wxSlider(this, ID_SLIDER, 0, 0, 100,
    //                     wxDefaultPosition, wxSize(20, 124),
    //                     wxSL_HORIZONTAL);
 
@@ -106,7 +106,7 @@ ScoreAlignDialog::ScoreAlignDialog(wxWindow *parent, ScoreAlignParams &params)
    mFramePeriodText = S.AddVariableText(SA_DFT_FRAME_PERIOD_TEXT, true,
                                       wxALIGN_LEFT | wxALIGN_CENTER_VERTICAL);
 
-   mWindowSizeLabel = S.AddVariableText(_("Window Size":), true,
+   mWindowSizeLabel = S.AddVariableText(_("Window Size:"), true,
                                       wxALIGN_RIGHT | wxALIGN_CENTER_VERTICAL);
    S.SetStyle(wxSL_HORIZONTAL);
    mWindowSizeSlider = S.Id(ID_WINDOWSIZE).AddSlider(wxT(""),
@@ -137,7 +137,7 @@ ScoreAlignDialog::ScoreAlignDialog(wxWindow *parent, ScoreAlignParams &params)
                               true, wxALIGN_LEFT | wxALIGN_CENTER_VERTICAL);
 
    /* i18n-hint: The English would be clearer if it had 'Duration' rather than 'Time'
-      This is a new experimental effect, and until we have it documented in the user
+      This is a NEW experimental effect, and until we have it documented in the user
       manual we don't have a clear description of what this parameter does.
       It is OK to leave it in English. */
    mPresmoothLabel = S.AddVariableText(_("Presmooth Time:"), true,
@@ -150,7 +150,7 @@ ScoreAlignDialog::ScoreAlignDialog(wxWindow *parent, ScoreAlignParams &params)
                                       wxALIGN_LEFT | wxALIGN_CENTER_VERTICAL);
 
    /* i18n-hint: The English would be clearer if it had 'Duration' rather than 'Time'
-      This is a new experimental effect, and until we have it documented in the user
+      This is a NEW experimental effect, and until we have it documented in the user
       manual we don't have a clear description of what this parameter does.
       It is OK to leave it in English. */
    mLineTimeLabel = S.AddVariableText(_("Line Time:"), true,
@@ -163,7 +163,7 @@ ScoreAlignDialog::ScoreAlignDialog(wxWindow *parent, ScoreAlignParams &params)
                                       wxALIGN_LEFT | wxALIGN_CENTER_VERTICAL);
 
    /* i18n-hint: The English would be clearer if it had 'Duration' rather than 'Time'
-      This is a new experimental effect, and until we have it documented in the user
+      This is a NEW experimental effect, and until we have it documented in the user
       manual we don't have a clear description of what this parameter does.
       It is OK to leave it in English. */
    mSmoothTimeLabel = S.AddVariableText(_("Smooth Time:"), true,
@@ -178,7 +178,7 @@ ScoreAlignDialog::ScoreAlignDialog(wxWindow *parent, ScoreAlignParams &params)
    S.EndMultiColumn();
    S.EndStatic();
 
-   mDefaultButton = new wxButton(this, ID_DEFAULT, _("Use Defaults"));
+   mDefaultButton = safenew wxButton(this, ID_DEFAULT, _("Use Defaults"));
    mDefaultButton->SetName(_("Restore Defaults"));
 
    S.AddStandardButtons(eOkButton | eCancelButton, mDefaultButton);
@@ -277,14 +277,11 @@ bool ScoreAlignDialog::TransferDataFromWindow()
 
 void CloseScoreAlignDialog()
 {
-   if (gScoreAlignDialog) {
-      delete gScoreAlignDialog;
-      gScoreAlignDialog = NULL;
-   }
+   gScoreAlignDialog.reset();
 }
 
 
-BEGIN_EVENT_TABLE(ScoreAlignDialog, wxDialog)
+BEGIN_EVENT_TABLE(ScoreAlignDialog, wxDialogWrapper)
 //   EVT_BUTTON(wxID_OK, ScoreAlignDialog::OnOK)
 //   EVT_BUTTON(wxID_CANCEL, ScoreAlignDialog::OnCancel)
    EVT_BUTTON(ID_DEFAULT, ScoreAlignDialog::OnDefault)

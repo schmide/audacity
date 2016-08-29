@@ -11,13 +11,15 @@
 #ifndef _IMPORT_
 #define _IMPORT_
 
+#include "ImportRaw.h" // defines TrackHolders
+#include "ImportForwards.h"
+#include <vector>
 #include <wx/arrstr.h>
 #include <wx/string.h>
-#include <wx/list.h>
-#include <wx/listimpl.cpp>
-#include <wx/dialog.h>
 #include <wx/listbox.h>
 #include <wx/tokenzr.h>
+
+#include "../widgets/wxPanelWrapper.h"
 
 class Tags;
 class TrackFactory;
@@ -32,7 +34,7 @@ public:
    wxString formatName;
    wxArrayString formatExtensions;
 
-   Format(wxString _formatName, wxArrayString _formatExtensions):
+   Format(const wxString &_formatName, const wxArrayString &_formatExtensions):
       formatName(_formatName),
       formatExtensions(_formatExtensions)
    {
@@ -41,9 +43,9 @@ public:
 
 class ExtImportItem;
 
-WX_DECLARE_LIST(Format, FormatList);
+using FormatList = std::vector<Format> ;
 WX_DEFINE_ARRAY_PTR(ImportPlugin *, ImportPluginPtrArray);
-WX_DECLARE_OBJARRAY(ExtImportItem, ExtImportItems);
+using ExtImportItems = std::vector< movable_ptr<ExtImportItem> >;
 
 class ExtImportItem
 {
@@ -83,9 +85,6 @@ class ExtImportItem
    */
   wxArrayString mime_types;
 };
-
-class ImportPluginList;
-class UnusableImportPluginList;
 
 class Importer {
 public:
@@ -130,35 +129,34 @@ public:
     * Returns a pointer to internal items array.
     * External objects are allowed to change the array contents.
     */
-   ExtImportItems *GetImportItems() { return mExtImportItems; };
+   ExtImportItems &GetImportItems() { return mExtImportItems; };
 
    /**
-    * Allocates new ExtImportItem, fills it with default data
+    * Allocates NEW ExtImportItem, fills it with default data
     * and returns a pointer to it.
     */
-    ExtImportItem *CreateDefaultImportItem();
+    movable_ptr<ExtImportItem> CreateDefaultImportItem();
 
-   // returns number of tracks imported
-   // if zero, the import failed and errorMessage will be set.
-   int Import(wxString fName,
+   // if false, the import failed and errorMessage will be set.
+   bool Import(const wxString &fName,
               TrackFactory *trackFactory,
-              Track *** tracks,
+              TrackHolders &tracks,
               Tags *tags,
               wxString &errorMessage);
 
 private:
    static Importer mInstance;
 
-   ExtImportItems *mExtImportItems;
-   ImportPluginList *mImportPluginList;
-   UnusableImportPluginList *mUnusableImportPluginList;
+   ExtImportItems mExtImportItems;
+   ImportPluginList mImportPluginList;
+   UnusableImportPluginList mUnusableImportPluginList;
 };
 
 //----------------------------------------------------------------------------
 // ImportStreamDialog
 //----------------------------------------------------------------------------
 
-class ImportStreamDialog: public wxDialog
+class ImportStreamDialog final : public wxDialogWrapper
 {
 public:
    // constructors and destructors

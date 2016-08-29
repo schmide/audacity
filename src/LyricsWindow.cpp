@@ -9,11 +9,11 @@
 
 **********************************************************************/
 
-#include "Experimental.h"
-
 #include "LyricsWindow.h"
 #include "Lyrics.h"
+#include "AudioIO.h"
 #include "Project.h"
+#include "TrackPanel.h" // for EVT_TRACK_PANEL_TIMER
 
 #include <wx/radiobut.h>
 #include <wx/toolbar.h>
@@ -49,7 +49,7 @@ LyricsWindow::LyricsWindow(AudacityProject *parent):
                                  wxT("") :
                                  wxString::Format(
                                    wxT(" - %s"),
-                                   parent->GetName().c_str()).c_str())),
+                                   parent->GetName()))),
             wxPoint(100, 300), gSize,
             //v Bug in wxFRAME_FLOAT_ON_PARENT:
             // If both the project frame and LyricsWindow are minimized and you restore LyricsWindow,
@@ -66,15 +66,15 @@ LyricsWindow::LyricsWindow(AudacityProject *parent):
    mProject = parent;
 
    // loads either the XPM or the windows resource, depending on the platform
-   #if !defined(__WXMAC__) && !defined(__WXX11__)
-      wxIcon *ic;
-      #ifdef __WXMSW__
-         ic = new wxIcon(wxICON(AudacityLogo));
-      #else
-         ic = new wxIcon(wxICON(AudacityLogo48x48));
-      #endif
-      SetIcon(*ic);
-      delete ic;
+#if !defined(__WXMAC__) && !defined(__WXX11__)
+   {
+#ifdef __WXMSW__
+      wxIcon ic{ wxICON(AudacityLogo) };
+#else
+      wxIcon ic{wxICON(AudacityLogo48x48)};
+#endif
+      SetIcon(ic);
+   }
    #endif
 
    wxPoint panelPos(0, 0);
@@ -86,8 +86,9 @@ LyricsWindow::LyricsWindow(AudacityProject *parent):
    //
    //wxToolBar* pToolBar = this->CreateToolBar();
    //const int kHorizMargin = 8;
+   //wxASSERT(pToolBar); // To justify safenew
    //wxRadioButton* pRadioButton_BouncingBall =
-   //   new wxRadioButton(pToolBar, kID_RadioButton_BouncingBall, _("Bouncing Ball"), wxPoint(kHorizMargin, 4),
+   //   safenew wxRadioButton(pToolBar, kID_RadioButton_BouncingBall, _("Bouncing Ball"), wxPoint(kHorizMargin, 4),
    //       wxDefaultSize, wxRB_GROUP);
    //// Reposition to center vertically.
    //wxSize tbSize = pToolBar->GetSize();
@@ -98,7 +99,7 @@ LyricsWindow::LyricsWindow(AudacityProject *parent):
    //
    //int left = kHorizMargin + btnSize.GetWidth() + kHorizMargin; //vvv Doesn't actually work. Probably need sizers.
    //wxRadioButton* pRadioButton_Highlight =
-   //   new wxRadioButton(pToolBar, kID_RadioButton_Highlight, _("Highlight"), wxPoint(left, top));
+   //   safenew wxRadioButton(pToolBar, kID_RadioButton_Highlight, _("Highlight"), wxPoint(left, top));
    //pToolBar->AddControl(pRadioButton_Highlight);
    //
    //panelPos.x += tbSize.GetHeight();
@@ -112,7 +113,7 @@ LyricsWindow::LyricsWindow(AudacityProject *parent):
    //
    //pToolBar->Realize();
 
-   mLyricsPanel = new Lyrics(this, -1, panelPos, panelSize);
+   mLyricsPanel = safenew Lyrics(this, -1, panelPos, panelSize);
 
    //vvv Highlight style is broken in ported version.
    //switch (mLyricsPanel->GetLyricsStyle())
@@ -123,10 +124,21 @@ LyricsWindow::LyricsWindow(AudacityProject *parent):
    //   default:
    //      pRadioButton_Highlight->SetValue(true); break;
    //}
+
+   // Events from the project don't propagate directly to this other frame, so...
+   mProject->Connect(EVT_TRACK_PANEL_TIMER,
+      wxCommandEventHandler(LyricsWindow::OnTimer),
+      NULL,
+      this);
 }
 
 LyricsWindow::~LyricsWindow()
-{}
+{
+   mProject->Disconnect(EVT_TRACK_PANEL_TIMER,
+      wxCommandEventHandler(LyricsWindow::OnTimer),
+      NULL,
+      this);
+}
 
 void LyricsWindow::OnCloseWindow(wxCloseEvent & WXUNUSED(event))
 {
@@ -143,3 +155,18 @@ void LyricsWindow::OnStyle_Highlight(wxCommandEvent & WXUNUSED(event))
    mLyricsPanel->SetLyricsStyle(Lyrics::kHighlightLyrics);
 }
 
+void LyricsWindow::OnTimer(wxCommandEvent &event)
+{
+   if (mProject->IsAudioActive())
+   {
+      GetLyricsPanel()->Update(gAudioIO->GetStreamTime());
+   }
+   else
+   {
+      // Reset lyrics display.
+      GetLyricsPanel()->Update(mProject->GetSel0());
+   }
+
+   // Let other listeners get the notification
+   event.Skip();
+}

@@ -33,7 +33,7 @@ for each problem encountered, since there can be many orphans.
 #include <wx/artprov.h>
 #include <wx/radiobox.h>
 
-class MultiDialog : public wxDialog
+class MultiDialog final : public wxDialogWrapper
 {
 public:
    MultiDialog(wxWindow * pParent, 
@@ -53,7 +53,7 @@ private:
 
 #define ID_SHOW_LOG_BUTTON 3333
 
-BEGIN_EVENT_TABLE(MultiDialog, wxDialog)
+BEGIN_EVENT_TABLE(MultiDialog, wxDialogWrapper)
    EVT_BUTTON( wxID_OK, MultiDialog::OnOK )
    EVT_BUTTON(ID_SHOW_LOG_BUTTON, MultiDialog::OnShowLog)
 END_EVENT_TABLE()
@@ -62,69 +62,84 @@ MultiDialog::MultiDialog(wxWindow * pParent,
                          wxString message,
                          wxString title,
                          const wxChar **buttons, wxString boxMsg, bool log)
-   : wxDialog(pParent, wxID_ANY, title,
+   : wxDialogWrapper(pParent, wxID_ANY, title,
                wxDefaultPosition, wxDefaultSize,
                wxCAPTION) // not wxDEFAULT_DIALOG_STYLE because we don't want wxCLOSE_BOX and wxSYSTEM_MENU
 {
-   wxBoxSizer *mainSizer = new wxBoxSizer(wxVERTICAL);
-   wxBoxSizer *vSizer = new wxBoxSizer(wxVERTICAL);
-   wxBoxSizer *iconAndTextSizer = new wxBoxSizer( wxHORIZONTAL );
+   SetName(GetTitle());
 
-   wxBitmap bitmap = wxArtProvider::GetIcon(wxART_WARNING,
-                                            wxART_MESSAGE_BOX);
-   wxStaticBitmap *icon = new wxStaticBitmap(this, -1, bitmap);
-   iconAndTextSizer->Add( icon, 0, wxCENTER );
-
-   wxStaticText *statText = new wxStaticText(this, -1, message);
-   statText->SetName(message); // fix for bug 577 (NVDA/Narrator screen readers do not read static text in dialogs)
-   iconAndTextSizer->Add(statText, 1, wxCENTER|wxLEFT,15 );
-
-   vSizer->Add(iconAndTextSizer, 0, wxALIGN_LEFT|wxALL, 5);
-
-
-   int count=0;
-   while(buttons[count])count++;
-   wxString *buttonLabels = new wxString[count];
-
-   count=0;
-   while(buttons[count]){
-      buttonLabels[count] = buttons[count];
-      count++;
-   }
-
-   mRadioBox = new wxRadioBox(this,-1,
-                         boxMsg,
-                         wxDefaultPosition, wxDefaultSize,
-                         count, buttonLabels,
-                         1, wxRA_SPECIFY_COLS);
-   mRadioBox->SetName(boxMsg);
-   mRadioBox->SetSelection(0);
-   vSizer->Add(mRadioBox, 1, wxEXPAND | wxALIGN_CENTER | wxALL, 5);
-
-
-   wxBoxSizer* buttonSizer = new wxBoxSizer(wxHORIZONTAL);
-
-   wxButton* pButton;
-   if(log)
+   wxString *buttonLabels;
+   wxBoxSizer *mainSizer;
    {
-      pButton = new wxButton(this, ID_SHOW_LOG_BUTTON, _("Show Log for Details"));
-      buttonSizer->Add(pButton, 0, wxALIGN_LEFT | wxALL, 5);
-      pButton->SetDefault(); // Encourage user to look at files.
+      auto uMainSizer = std::make_unique<wxBoxSizer>(wxVERTICAL);
+      mainSizer = uMainSizer.get();
 
-      buttonSizer->AddSpacer(40);
+      {
+         auto vSizer = std::make_unique<wxBoxSizer>(wxVERTICAL);
+         {
+            auto iconAndTextSizer = std::make_unique<wxBoxSizer>(wxHORIZONTAL);
+
+            wxBitmap bitmap = wxArtProvider::GetIcon(wxART_WARNING,
+               wxART_MESSAGE_BOX);
+            wxStaticBitmap *icon = safenew wxStaticBitmap(this, -1, bitmap);
+            iconAndTextSizer->Add(icon, 0, wxCENTER);
+
+            wxStaticText *statText = safenew wxStaticText(this, -1, message);
+            statText->SetName(message); // fix for bug 577 (NVDA/Narrator screen readers do not read static text in dialogs)
+            iconAndTextSizer->Add(statText, 1, wxCENTER | wxLEFT, 15);
+
+            vSizer->Add(iconAndTextSizer.release(), 0, wxALIGN_LEFT | wxALL, 5);
+         }
+
+
+         int count = 0;
+         while (buttons[count])count++;
+         buttonLabels = new wxString[count];
+
+         count = 0;
+         while (buttons[count]){
+            buttonLabels[count] = buttons[count];
+            count++;
+         }
+
+         mRadioBox = safenew wxRadioBox(this, -1,
+            boxMsg,
+            wxDefaultPosition, wxDefaultSize,
+            count, buttonLabels,
+            1, wxRA_SPECIFY_COLS);
+         mRadioBox->SetName(boxMsg);
+         mRadioBox->SetSelection(0);
+         vSizer->Add(mRadioBox, 1, wxEXPAND | wxALIGN_CENTER | wxALL, 5);
+
+
+         {
+            auto buttonSizer = std::make_unique<wxBoxSizer>(wxHORIZONTAL);
+
+            wxButton* pButton;
+            if (log)
+            {
+               pButton = safenew wxButton(this, ID_SHOW_LOG_BUTTON, _("Show Log for Details"));
+               buttonSizer->Add(pButton, 0, wxALIGN_LEFT | wxALL, 5);
+               pButton->SetDefault(); // Encourage user to look at files.
+
+               buttonSizer->AddSpacer(40);
+            }
+
+            pButton = safenew wxButton(this, wxID_OK, _("OK"));
+            if (!log)
+               pButton->SetDefault();
+            buttonSizer->Add(pButton, 0, wxALIGN_RIGHT | wxALL, 5);
+
+            vSizer->Add(buttonSizer.release(), 0, wxALIGN_CENTER | wxALL, 5);
+         }
+
+         mainSizer->Add(vSizer.release(), 0, wxALL, 5);
+      }
+
+      SetAutoLayout(true);
+      SetSizer(uMainSizer.release());
    }
 
-   pButton = new wxButton(this, wxID_OK, _("OK"));
-   if(!log)
-      pButton->SetDefault();
-   buttonSizer->Add(pButton, 0, wxALIGN_RIGHT | wxALL, 5);
-
-   vSizer->Add(buttonSizer, 0, wxALIGN_CENTER | wxALL, 5);
-
-
-   mainSizer->Add(vSizer, 0, wxALL, 5);
-   SetAutoLayout(true);
-   SetSizer(mainSizer);
    mainSizer->Fit(this);
    mainSizer->SetSizeHints(this);
    delete[] buttonLabels;
@@ -141,9 +156,9 @@ void MultiDialog::OnShowLog(wxCommandEvent & WXUNUSED(event))
 }
 
 
-int ShowMultiDialog(wxString message,
-   wxString title,
-   const wxChar **buttons, wxString boxMsg, bool log)
+int ShowMultiDialog(const wxString &message,
+   const wxString &title,
+   const wxChar **buttons, const wxString &boxMsg, bool log)
 {
    wxWindow * pParent = wxGetApp().GetTopWindow();
 

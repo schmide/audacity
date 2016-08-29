@@ -16,29 +16,31 @@
 #ifndef __AUDACITY_LINKINGHTMLWINDOW__
 #define __AUDACITY_LINKINGHTMLWINDOW__
 
-#include <wx/dialog.h>
 #include <wx/html/htmlwin.h>
 #include <wx/frame.h>
 
 #include "HtmlWindow.h"
+#include "wxPanelWrapper.h"
 
 void OpenInDefaultBrowser(const wxHtmlLinkInfo& link);
 
-class AUDACITY_DLL_API LinkingHtmlWindow : public HtmlWindow
+class AUDACITY_DLL_API LinkingHtmlWindow final : public HtmlWindow
 {
  public:
    LinkingHtmlWindow(wxWindow *parent, wxWindowID id = -1,
                      const wxPoint& pos = wxDefaultPosition,
                      const wxSize& size = wxDefaultSize,
                      long style = wxHW_SCROLLBAR_AUTO);
-   virtual void OnLinkClicked(const wxHtmlLinkInfo& link);
-   //virtual void OnSetTitle(const wxString& title);
+   void OnLinkClicked(const wxHtmlLinkInfo& link) override;
+   //void OnSetTitle(const wxString& title) override;
 
 };
 
-class BrowserFrame : public wxFrame
+class BrowserDialog /* not final */ : public wxDialogWrapper
 {
 public:
+   enum { ID = 0 };
+   BrowserDialog(wxWindow *pParent, const wxString &title);
 
    void OnForward(wxCommandEvent & event);
    void OnBackward(wxCommandEvent & event);
@@ -46,10 +48,11 @@ public:
    void OnKeyDown(wxKeyEvent & event);
 
    void UpdateButtons();
-   //virtual void SetLabel(const wxString& label);
+   //void SetLabel(const wxString& label) override;
 
 
    HtmlWindow * mpHtml;
+   bool mDismissed{};
    DECLARE_EVENT_TABLE()
 };
 

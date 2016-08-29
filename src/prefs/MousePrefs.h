@@ -15,16 +15,16 @@
 #include <wx/string.h>
 #include <wx/window.h>
 
-#include "../ShuttleGui.h"
-
 #include "PrefsPanel.h"
 
-class MousePrefs:public PrefsPanel
+class ShuttleGui;
+
+class MousePrefs final : public PrefsPanel
 {
  public:
    MousePrefs(wxWindow * parent);
    ~MousePrefs();
-   virtual bool Apply();
+   bool Apply() override;
 
  private:
    void Populate();
@@ -38,4 +38,9 @@ class MousePrefs:public PrefsPanel
    wxListCtrl * mList;
 };
 
+class MousePrefsFactory final : public PrefsPanelFactory
+{
+public:
+   PrefsPanel *Create(wxWindow *parent) override;
+};
 #endif

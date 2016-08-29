@@ -33,6 +33,7 @@ a graph for EffectScienFilter.
 *//*******************************************************************/
 
 #include "../Audacity.h"
+#include "ScienFilter.h"
 
 #include <math.h>
 #include <float.h>
@@ -50,12 +51,12 @@ a graph for EffectScienFilter.
 #include "../PlatformCompatibility.h"
 #include "../Prefs.h"
 #include "../Project.h"
+#include "../ShuttleGui.h"
 #include "../Theme.h"
 #include "../WaveTrack.h"
 #include "../widgets/valnum.h"
 
 #include "Equalization.h" // For SliderAx
-#include "ScienFilter.h"
 
 #if !defined(M_PI)
 #define PI = 3.1415926535897932384626433832795
@@ -159,6 +160,8 @@ EffectScienFilter::EffectScienFilter()
    mCutoff = DEF_Cutoff;
    mRipple = DEF_Passband;
    mStopbandRipple = DEF_Stopband;
+
+   SetLinearEffectFlag(true);
 
    mOrderIndex = mOrder - 1;
 
@@ -360,7 +363,7 @@ bool EffectScienFilter::Init()
 
 void EffectScienFilter::PopulateOrExchange(ShuttleGui & S)
 {
-   wxWindow *parent = S.GetParent();
+   wxWindow *const parent = S.GetParent();
 
    S.AddSpace(5);
    S.SetSizerProportion(1);
@@ -375,7 +378,7 @@ void EffectScienFilter::PopulateOrExchange(ShuttleGui & S)
 
       S.StartVerticalLay();
       {
-         mdBRuler = new RulerPanel(parent, wxID_ANY);
+         mdBRuler = safenew RulerPanel(parent, wxID_ANY);
          mdBRuler->ruler.SetBounds(0, 0, 100, 100); // Ruler can't handle small sizes
          mdBRuler->ruler.SetOrientation(wxVERTICAL);
          mdBRuler->ruler.SetRange(30.0, -120.0);
@@ -389,17 +392,17 @@ void EffectScienFilter::PopulateOrExchange(ShuttleGui & S)
          S.SetBorder(1);
          S.AddSpace(1, 1);
          S.Prop(1);
-         S.AddWindow(mdBRuler, wxEXPAND | wxALIGN_RIGHT | wxTOP);
+         S.AddWindow(mdBRuler, wxALIGN_RIGHT | wxTOP);
          S.AddSpace(1, 1);
       }
       S.EndVerticalLay();
 
-      mPanel = new EffectScienFilterPanel(this, parent);
+      mPanel = safenew EffectScienFilterPanel(this, parent);
       mPanel->SetFreqRange(mLoFreq, mNyquist);
 
       S.SetBorder(5);
       S.Prop(1);
-      S.AddWindow(mPanel, wxEXPAND | wxALIGN_CENTRE | wxRIGHT);
+      S.AddWindow(mPanel, wxEXPAND | wxRIGHT);
       S.SetSizeHints(-1, -1);
 
       S.StartVerticalLay();
@@ -409,7 +412,7 @@ void EffectScienFilter::PopulateOrExchange(ShuttleGui & S)
          mdBMaxSlider = S.Id(ID_dBMax).AddSlider(wxT(""), 10, 20, 0);
 #if wxUSE_ACCESSIBILITY
          mdBMaxSlider->SetName(_("Max dB"));
-         mdBMaxSlider->SetAccessible(new SliderAx(mdBMaxSlider, wxString(wxT("%d ")) + _("dB")));
+         mdBMaxSlider->SetAccessible(safenew SliderAx(mdBMaxSlider, wxString(wxT("%d ")) + _("dB")));
 #endif
 
          S.SetStyle(wxSL_VERTICAL | wxSL_INVERSE);
@@ -417,7 +420,7 @@ void EffectScienFilter::PopulateOrExchange(ShuttleGui & S)
          S.AddVariableText(_("- dB"), false, wxCENTER);
 #if wxUSE_ACCESSIBILITY
          mdBMinSlider->SetName(_("Min dB"));
-         mdBMinSlider->SetAccessible(new SliderAx(mdBMinSlider, wxString(wxT("%d ")) + _("dB")));
+         mdBMinSlider->SetAccessible(safenew SliderAx(mdBMinSlider, wxString(wxT("%d ")) + _("dB")));
 #endif
       }
       S.EndVerticalLay();
@@ -428,7 +431,7 @@ void EffectScienFilter::PopulateOrExchange(ShuttleGui & S)
 
       S.AddSpace(1, 1);
 
-      mfreqRuler  = new RulerPanel(parent, wxID_ANY);
+      mfreqRuler  = safenew RulerPanel(parent, wxID_ANY);
       mfreqRuler->ruler.SetBounds(0, 0, 100, 100); // Ruler can't handle small sizes
       mfreqRuler->ruler.SetOrientation(wxHORIZONTAL);
       mfreqRuler->ruler.SetLog(true);
@@ -443,7 +446,6 @@ void EffectScienFilter::PopulateOrExchange(ShuttleGui & S)
 
       S.Prop(1);
       S.AddWindow(mfreqRuler, wxEXPAND | wxALIGN_LEFT | wxRIGHT);
-      S.SetSizeHints(-1, -1);
 
       S.AddSpace(1, 1);
 
@@ -723,7 +725,7 @@ bool EffectScienFilter::CalcFilter()
       }
       if ((mOrder & 1) == 0)
       {
-         float fTemp = pow (10.0, -wxMax(0.001, mRipple) / 20.0);      // at DC the response is down R dB (for even-order)
+         float fTemp = DB_TO_LINEAR(-wxMax(0.001, mRipple));      // at DC the response is down R dB (for even-order)
          mpBiquad[0].fNumerCoeffs [0] *= fTemp;
          mpBiquad[0].fNumerCoeffs [1] *= fTemp;
          mpBiquad[0].fNumerCoeffs [2] *= fTemp;
@@ -759,7 +761,7 @@ bool EffectScienFilter::CalcFilter()
    case kChebyshevTypeII:     // Chebyshev Type 2
       float fSZeroX, fSZeroY;
       float fSPoleX, fSPoleY;
-      eps = pow (10.0, -wxMax(0.001, mStopbandRipple) / 20.0);
+      eps = DB_TO_LINEAR(-wxMax(0.001, mStopbandRipple));
       a = log (1 / eps + sqrt(1 / square(eps) + 1)) / mOrder;
 
       // Assume even order
@@ -1006,13 +1008,13 @@ void EffectScienFilter::EnableDisableRippleCtl(int FilterType)
 // EffectScienFilterPanel
 //----------------------------------------------------------------------------
 
-BEGIN_EVENT_TABLE(EffectScienFilterPanel, wxPanel)
+BEGIN_EVENT_TABLE(EffectScienFilterPanel, wxPanelWrapper)
     EVT_PAINT(EffectScienFilterPanel::OnPaint)
     EVT_SIZE(EffectScienFilterPanel::OnSize)
 END_EVENT_TABLE()
 
 EffectScienFilterPanel::EffectScienFilterPanel(EffectScienFilter *effect, wxWindow *parent)
-:  wxPanel(parent, wxID_ANY, wxDefaultPosition, wxSize(400, 200))
+:  wxPanelWrapper(parent, wxID_ANY, wxDefaultPosition, wxSize(400, 200))
 {
    mEffect = effect;
    mParent = parent;
@@ -1028,10 +1030,6 @@ EffectScienFilterPanel::EffectScienFilterPanel(EffectScienFilter *effect, wxWind
 
 EffectScienFilterPanel::~EffectScienFilterPanel()
 {
-   if (mBitmap)
-   {
-      delete mBitmap;
-   }
 }
 
 void EffectScienFilterPanel::SetFreqRange(double lo, double hi)
@@ -1053,6 +1051,11 @@ bool EffectScienFilterPanel::AcceptsFocus() const
    return false;
 }
 
+bool EffectScienFilterPanel::AcceptsFocusFromKeyboard() const
+{
+   return false;
+}
+
 void EffectScienFilterPanel::OnSize(wxSizeEvent & WXUNUSED(evt))
 {
    Refresh(false);
@@ -1066,14 +1069,9 @@ void EffectScienFilterPanel::OnPaint(wxPaintEvent & WXUNUSED(evt))
 
    if (!mBitmap || mWidth != width || mHeight != height)
    {
-      if (mBitmap)
-      {
-         delete mBitmap;
-      }
-
       mWidth = width;
       mHeight = height;
-      mBitmap = new wxBitmap(mWidth, mHeight);
+      mBitmap = std::make_unique<wxBitmap>(mWidth, mHeight);
    }
 
    wxBrush bkgndBrush(wxSystemSettings::GetColour(wxSYS_COLOUR_3DFACE));
@@ -1129,7 +1127,7 @@ void EffectScienFilterPanel::OnPaint(wxPaintEvent & WXUNUSED(evt))
       x = mEnvRect.x + i;
       freq = pow(10.0, loLog + i * step);          //Hz
       yF = mEffect->FilterMagnAtFreq (freq);
-      yF = 20.0 * log10(yF);
+      yF = LINEAR_TO_DB(yF);
 
       if (yF < mDbMin)
       {

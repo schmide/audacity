@@ -17,15 +17,31 @@ It is also a place to document colour usage policy in Audacity
 
 *//********************************************************************/
 
+#include "Audacity.h"
+#include "AColor.h"
+
 #include <wx/colour.h>
 #include <wx/dc.h>
 #include <wx/settings.h>
 #include <wx/utils.h>
 
-#include "AColor.h"
 #include "Theme.h"
 #include "Experimental.h"
 #include "AllThemeResources.h"
+
+void DCUnchanger::operator () (wxDC *pDC) const
+{
+   if (pDC) {
+      pDC->SetPen(pen);
+      pDC->SetBrush(brush);
+      pDC->SetLogicalFunction(wxRasterOperationMode(logicalOperation));
+   }
+}
+
+ADCChanger::ADCChanger(wxDC *pDC)
+   : Base{ pDC, ::DCUnchanger{ pDC->GetBrush(), pDC->GetPen(),
+      long(pDC->GetLogicalFunction()) } }
+{}
 
 bool AColor::inited = false;
 wxBrush AColor::lightBrush[2];
@@ -62,6 +78,7 @@ wxPen AColor::labelSurroundPen;
 wxPen AColor::trackFocusPens[3];
 wxPen AColor::snapGuidePen;
 
+wxPen AColor::tooltipPen;
 wxBrush AColor::tooltipBrush;
 
 // The spare pen and brush possibly help us cut down on the
@@ -101,10 +118,10 @@ void AColor::Arrow(wxDC & dc, wxCoord x, wxCoord y, int width, bool down)
 void AColor::Line(wxDC & dc, wxCoord x1, wxCoord y1, wxCoord x2, wxCoord y2)
 {
    // As of 2.8.9 (possibly earlier), wxDC::DrawLine() on the Mac draws the
-   // last point since it is now based on the new wxGraphicsContext system.
+   // last point since it is now based on the NEW wxGraphicsContext system.
    // Make the other platforms do the same thing since the other platforms
    // "may" follow they get wxGraphicsContext going.
-#if defined(__WXMAC__)
+#if defined(__WXMAC__) || defined(__WXGTK3__)
    dc.DrawLine(x1, y1, x2, y2);
 #else
    bool point = false;
@@ -157,11 +174,20 @@ void AColor::DrawFocus(wxDC & dc, wxRect & rect)
          x2 = rect.GetRight(),
          y2 = rect.GetBottom();
 
+#ifdef __WXMAC__
+   // Why must this be different?
+   // Otherwise nothing is visible if you do as for the
+   // other platforms.
+   dc.SetPen(wxPen(wxT("MEDIUM GREY"), 1, wxSOLID));
+
+   dc.SetLogicalFunction(wxCOPY);
+#else
    dc.SetPen(wxPen(wxT("MEDIUM GREY"), 0, wxSOLID));
 
    // this seems to be closer than what Windows does than wxINVERT although
    // I'm still not sure if it's correct
    dc.SetLogicalFunction(wxAND_REVERSE);
+#endif
 
    wxCoord z;
    for ( z = x1 + 1; z < x2; z += 2 )
@@ -182,7 +208,7 @@ void AColor::DrawFocus(wxDC & dc, wxRect & rect)
    dc.SetLogicalFunction(wxCOPY);
 }
 
-void AColor::Bevel(wxDC & dc, bool up, wxRect & r)
+void AColor::Bevel(wxDC & dc, bool up, const wxRect & r)
 {
    if (up)
       AColor::Light(&dc, false);
@@ -210,7 +236,7 @@ wxColour AColor::Blend( const wxColour & c1, const wxColour & c2 )
    return c3;
 }
 
-void AColor::BevelTrackInfo(wxDC & dc, bool up, wxRect & r)
+void AColor::BevelTrackInfo(wxDC & dc, bool up, const wxRect & r)
 {
 #ifndef EXPERIMENTAL_THEMING
    Bevel( dc, up, r );
@@ -300,13 +326,17 @@ void AColor::TrackPanelBackground(wxDC * dc, bool selected)
 #endif
 }
 
-
 void AColor::CursorColor(wxDC * dc)
 {
    if (!inited)
       Init();
+#if defined(__WXMAC__) || defined(__WXGTK3__)
+   dc->SetLogicalFunction(wxCOPY);
+   dc->SetPen(wxColor(0, 0, 0, 128));
+#else
    dc->SetLogicalFunction(wxINVERT);
    dc->SetPen(cursorPen);
+#endif
 }
 
 void AColor::IndicatorColor(wxDC * dc, bool bIsNotRecording)
@@ -423,6 +453,7 @@ void AColor::Init()
    theTheme.SetPenColour(   playRegionPen[1],  clrRulerPlaybackPen);
 
    //Determine tooltip color
+   tooltipPen.SetColour( wxSystemSettingsNative::GetColour(wxSYS_COLOUR_INFOTEXT) );
    tooltipBrush.SetColour( wxSystemSettingsNative::GetColour(wxSYS_COLOUR_INFOBK) );
 
    // A tiny gradient of yellow surrounding the current focused track
@@ -616,8 +647,11 @@ void AColor::PreComputeGradient() {
                   case ColorGradientTimeAndFrequencySelected:
                      if( !grayscale )
                      {
-                        // flip the blue, makes spectrogram more yellow.
-                        b = 1.0f - 0.75f * b;
+                        float temp;
+                        temp = r;
+                        r = g;
+                        g = b;
+                        b = temp;
                         break;
                      }
                      // else fall through to SAME grayscale colour as normal selection.

@@ -13,7 +13,14 @@
 
 ********************************************************************/
 
-class SoundActivatedRecord : public wxDialog
+#ifndef __AUDACITY_SOUND_ACTIVATED_RECORD__
+#define __AUDACITY_SOUND_ACTIVATED_RECORD__
+
+#include "widgets/wxPanelWrapper.h"
+
+class ShuttleGui;
+
+class SoundActivatedRecord final : public wxDialogWrapper
 {
 public:
    SoundActivatedRecord(wxWindow* parent);
@@ -27,3 +34,4 @@ private:
    DECLARE_EVENT_TABLE();
 };
 
+#endif

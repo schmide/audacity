@@ -17,10 +17,10 @@
 
 #include <wx/window.h>
 
-#include "../ShuttleGui.h"
-
 #include "PrefsPanel.h"
 
+
+class ShuttleGui;
 
 enum {
    kModuleDisabled = 0,
@@ -31,15 +31,15 @@ enum {
 };
 
 
-class ModulePrefs:public PrefsPanel
+class ModulePrefs final : public PrefsPanel
 {
  public:
    ModulePrefs(wxWindow * parent);
    ~ModulePrefs();
-   virtual bool Apply();
+   bool Apply() override;
 
-   static int GetModuleStatus( wxString fname );
-   static void SetModuleStatus( wxString fname, int iStatus );
+   static int GetModuleStatus( const wxString &fname );
+   static void SetModuleStatus( const wxString &fname, int iStatus );
 
  private:
    void GetAllModuleStatuses();
@@ -47,6 +47,12 @@ class ModulePrefs:public PrefsPanel
    void PopulateOrExchange(ShuttleGui & S);
    wxArrayString mModules;
    wxArrayInt    mStatuses;
+   wxArrayString mPaths;
 };
 
+class ModulePrefsFactory final : public PrefsPanelFactory
+{
+public:
+   PrefsPanel *Create(wxWindow *parent) override;
+};
 #endif

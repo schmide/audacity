@@ -26,12 +26,12 @@ the ability to not see similar warnings again for this session.
 #include <wx/artprov.h>
 #include <wx/button.h>
 #include <wx/checkbox.h>
-#include <wx/dialog.h>
 #include <wx/intl.h>
 #include <wx/sizer.h>
 #include <wx/stattext.h>
+#include "wxPanelWrapper.h"
 
-class WarningDialog : public wxDialog
+class WarningDialog final : public wxDialogWrapper
 {
  public:
    // constructors and destructors
@@ -47,15 +47,17 @@ class WarningDialog : public wxDialog
    DECLARE_EVENT_TABLE()
 };
 
-BEGIN_EVENT_TABLE(WarningDialog, wxDialog)
+BEGIN_EVENT_TABLE(WarningDialog, wxDialogWrapper)
    EVT_BUTTON(wxID_OK, WarningDialog::OnOK)
 END_EVENT_TABLE()
 
 WarningDialog::WarningDialog(wxWindow *parent, wxString message, bool showCancelButton)
-:  wxDialog(parent, wxID_ANY, (wxString)_("Warning"),
+:  wxDialogWrapper(parent, wxID_ANY, (wxString)_("Warning"),
             wxDefaultPosition, wxDefaultSize,
             (showCancelButton ? wxDEFAULT_DIALOG_STYLE : wxCAPTION | wxSYSTEM_MENU)) // Unlike wxDEFAULT_DIALOG_STYLE, no wxCLOSE_BOX.
 {
+   SetName(GetTitle());
+
    SetIcon(wxArtProvider::GetIcon(wxART_WARNING, wxART_MESSAGE_BOX));
    ShuttleGui S(this, eIsCreating);
 
@@ -79,8 +81,8 @@ void WarningDialog::OnOK(wxCommandEvent& WXUNUSED(event))
 }
 
 int ShowWarningDialog(wxWindow *parent,
-                      wxString internalDialogName,
-                      wxString message,
+                      const wxString &internalDialogName,
+                      const wxString &message,
                       bool showCancelButton)
 {
    wxString key(wxT("/Warnings/") + internalDialogName);

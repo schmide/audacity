@@ -22,7 +22,6 @@
 
 
 #include "Audacity.h"
-
 #include "Mix.h"
 
 #include <math.h>
@@ -35,28 +34,26 @@
 
 #include "WaveTrack.h"
 #include "DirManager.h"
-#include "Envelope.h"
 #include "Internat.h"
 #include "Prefs.h"
 #include "Project.h"
 #include "Resample.h"
+#include "TimeTrack.h"
 #include "float_cast.h"
 
-//TODO-MB: wouldn't it make more sense to delete the time track after 'mix and render'?
-bool MixAndRender(TrackList *tracks, TrackFactory *trackFactory,
+//TODO-MB: wouldn't it make more sense to DELETE the time track after 'mix and render'?
+void MixAndRender(TrackList *tracks, TrackFactory *trackFactory,
                   double rate, sampleFormat format,
                   double startTime, double endTime,
-                  WaveTrack **newLeft, WaveTrack **newRight)
+                  WaveTrack::Holder &uLeft, WaveTrack::Holder &uRight)
 {
+   uLeft.reset(), uRight.reset();
+
    // This function was formerly known as "Quick Mix".
-   WaveTrack **waveArray;
    Track *t;
-   int numWaves = 0; /* number of wave tracks in the selection */
-   int numMono = 0;  /* number of mono, centre-panned wave tracks in selection*/
    bool mono = false;   /* flag if output can be mono without loosing anything*/
    bool oneinput = false;  /* flag set to true if there is only one input track
                               (mono or stereo) */
-   int w;
 
    TrackListIterator iter(tracks);
    SelectedTrackListOfKindIterator usefulIter(Track::Wave, tracks);
@@ -64,6 +61,8 @@ bool MixAndRender(TrackList *tracks, TrackFactory *trackFactory,
    // selected WaveTracks. The tracklist is (confusingly) the list of all
    // tracks in the project
 
+   int numWaves = 0; /* number of wave tracks in the selection */
+   int numMono = 0;  /* number of mono, centre-panned wave tracks in selection*/
    t = iter.First();
    while (t) {
       if (t->GetSelected() && t->GetKind() == Track::Wave) {
@@ -89,13 +88,12 @@ bool MixAndRender(TrackList *tracks, TrackFactory *trackFactory,
    double mixEndTime = 0.0;   /* end time of last track to end */
    double tstart, tend;    // start and end times for one track.
 
-   waveArray = new WaveTrack *[numWaves];
-   w = 0;
+   WaveTrackConstArray waveArray;
    t = iter.First();
 
    while (t) {
       if (t->GetSelected() && t->GetKind() == Track::Wave) {
-         waveArray[w++] = (WaveTrack *) t;
+         waveArray.push_back(static_cast<WaveTrack *>(t));
          tstart = t->GetStartTime();
          tend = t->GetEndTime();
          if (tend > mixEndTime)
@@ -119,18 +117,18 @@ bool MixAndRender(TrackList *tracks, TrackFactory *trackFactory,
       t = iter.Next();
    }
 
-   /* create the destination track (new track) */
+   /* create the destination track (NEW track) */
    if ((numWaves == 1) || ((numWaves == 2) && (usefulIter.First()->GetLink() != NULL)))
       oneinput = true;
    // only one input track (either 1 mono or one linked stereo pair)
 
-   WaveTrack *mixLeft = trackFactory->NewWaveTrack(format, rate);
+   auto mixLeft = trackFactory->NewWaveTrack(format, rate);
    if (oneinput)
       mixLeft->SetName(usefulIter.First()->GetName()); /* set name of output track to be the same as the sole input track */
    else
       mixLeft->SetName(_("Mix"));
    mixLeft->SetOffset(mixStartTime);
-   WaveTrack *mixRight = 0;
+   decltype(mixLeft) mixRight{};
    if (mono) {
       mixLeft->SetChannel(Track::MonoChannel);
    }
@@ -152,7 +150,7 @@ bool MixAndRender(TrackList *tracks, TrackFactory *trackFactory,
 
 
 
-   int maxBlockLen = mixLeft->GetIdealBlockSize();
+   auto maxBlockLen = mixLeft->GetIdealBlockSize();
 
    // If the caller didn't specify a time range, use the whole range in which
    // any input track had clips in it.
@@ -161,52 +159,50 @@ bool MixAndRender(TrackList *tracks, TrackFactory *trackFactory,
       endTime = mixEndTime;
    }
 
-   Mixer *mixer = new Mixer(numWaves, waveArray,
-                            Mixer::WarpOptions(tracks->GetTimeTrack()),
-                            startTime, endTime, mono ? 1 : 2, maxBlockLen, false,
-                            rate, format);
+   Mixer mixer(waveArray,
+      Mixer::WarpOptions(tracks->GetTimeTrack()),
+      startTime, endTime, mono ? 1 : 2, maxBlockLen, false,
+      rate, format);
 
    ::wxSafeYield();
-   ProgressDialog *progress = new ProgressDialog(_("Mix and Render"),
-                                                 _("Mixing and rendering tracks"));
 
    int updateResult = eProgressSuccess;
-   while(updateResult == eProgressSuccess) {
-      sampleCount blockLen = mixer->Process(maxBlockLen);
+   {
+      ProgressDialog progress(_("Mix and Render"),
+         _("Mixing and rendering tracks"));
 
-      if (blockLen == 0)
-         break;
+      while (updateResult == eProgressSuccess) {
+         auto blockLen = mixer.Process(maxBlockLen);
 
-      if (mono) {
-         samplePtr buffer = mixer->GetBuffer();
-         mixLeft->Append(buffer, format, blockLen);
+         if (blockLen == 0)
+            break;
+
+         if (mono) {
+            samplePtr buffer = mixer.GetBuffer();
+            mixLeft->Append(buffer, format, blockLen);
+         }
+         else {
+            samplePtr buffer;
+            buffer = mixer.GetBuffer(0);
+            mixLeft->Append(buffer, format, blockLen);
+            buffer = mixer.GetBuffer(1);
+            mixRight->Append(buffer, format, blockLen);
+         }
+
+         updateResult = progress.Update(mixer.MixGetCurrentTime() - startTime, endTime - startTime);
       }
-      else {
-         samplePtr buffer;
-         buffer = mixer->GetBuffer(0);
-         mixLeft->Append(buffer, format, blockLen);
-         buffer = mixer->GetBuffer(1);
-         mixRight->Append(buffer, format, blockLen);
-      }
-
-      updateResult = progress->Update(mixer->MixGetCurrentTime() - startTime, endTime - startTime);
    }
-
-   delete progress;
 
    mixLeft->Flush();
    if (!mono)
       mixRight->Flush();
    if (updateResult == eProgressCancelled || updateResult == eProgressFailed)
    {
-      delete mixLeft;
-      if (!mono)
-         delete mixRight;
-   } else {
-      *newLeft = mixLeft;
-      if (!mono)
-         *newRight = mixRight;
-
+      return;
+   }
+   else {
+      uLeft = std::move(mixLeft),
+         uRight = std::move(mixRight);
 #if 0
    int elapsedMS = wxGetElapsedTime();
    double elapsedTime = elapsedMS * 0.001;
@@ -220,11 +216,6 @@ bool MixAndRender(TrackList *tracks, TrackFactory *trackFactory,
    printf("Max number of tracks to mix in real time: %f\n", maxTracks);
 #endif
    }
-
-   delete[] waveArray;
-   delete mixer;
-
-   return (updateResult == eProgressSuccess || updateResult == eProgressStopped);
 }
 
 Mixer::WarpOptions::WarpOptions(double min, double max)
@@ -247,7 +238,7 @@ Mixer::WarpOptions::WarpOptions(double min, double max)
    }
 }
 
-Mixer::Mixer(int numInputTracks, WaveTrack **inputTracks,
+Mixer::Mixer(const WaveTrackConstArray &inputTracks,
              const WarpOptions &warpOptions,
              double startTime, double stopTime,
              int numOutChannels, int outBufferSize, bool outInterleaved,
@@ -256,15 +247,16 @@ Mixer::Mixer(int numInputTracks, WaveTrack **inputTracks,
 {
    int i;
 
+   const auto numInputTracks = inputTracks.size();
    mHighQuality = highQuality;
    mNumInputTracks = numInputTracks;
-   mInputTrack = new WaveTrack*[mNumInputTracks];
+   mInputTrack = new WaveTrackCache[mNumInputTracks];
 
    // mSamplePos holds for each track the next sample position not
    // yet processed.
    mSamplePos = new sampleCount[mNumInputTracks];
    for(i=0; i<mNumInputTracks; i++) {
-      mInputTrack[i] = inputTracks[i];
+      mInputTrack[i].SetTrack(inputTracks[i]);
       mSamplePos[i] = inputTracks[i]->TimeToLongSamples(startTime);
    }
    mTimeTrack = warpOptions.timeTrack;
@@ -294,11 +286,11 @@ Mixer::Mixer(int numInputTracks, WaveTrack **inputTracks,
       mInterleavedBufferSize = mBufferSize;
    }
 
-   mBuffer = new samplePtr[mNumBuffers];
-   mTemp = new samplePtr[mNumBuffers];
+   mBuffer = new SampleBuffer[mNumBuffers];
+   mTemp = new SampleBuffer[mNumBuffers];
    for (int c = 0; c < mNumBuffers; c++) {
-      mBuffer[c] = NewSamples(mInterleavedBufferSize, mFormat);
-      mTemp[c] = NewSamples(mInterleavedBufferSize, floatSample);
+      mBuffer[c].Allocate(mInterleavedBufferSize, mFormat);
+      mTemp[c].Allocate(mInterleavedBufferSize, floatSample);
    }
    mFloatBuffer = new float[mInterleavedBufferSize];
 
@@ -320,7 +312,7 @@ Mixer::Mixer(int numInputTracks, WaveTrack **inputTracks,
    mSampleQueue = new float *[mNumInputTracks];
    mResample = new Resample*[mNumInputTracks];
    for(i=0; i<mNumInputTracks; i++) {
-      double factor = (mRate / mInputTrack[i]->GetRate());
+      double factor = (mRate / mInputTrack[i].GetTrack()->GetRate());
       double minFactor, maxFactor;
       if (mTimeTrack) {
          // variable rate resampling
@@ -346,9 +338,7 @@ Mixer::Mixer(int numInputTracks, WaveTrack **inputTracks,
       mQueueLen[i] = 0;
    }
 
-   int envLen = mInterleavedBufferSize;
-   if (mQueueMaxLen > envLen)
-      envLen = mQueueMaxLen;
+   const auto envLen = std::max(mQueueMaxLen, mInterleavedBufferSize);
    mEnvValues = new double[envLen];
 }
 
@@ -356,10 +346,6 @@ Mixer::~Mixer()
 {
    int i;
 
-   for (i = 0; i < mNumBuffers; i++) {
-      DeleteSamples(mBuffer[i]);
-      DeleteSamples(mTemp[i]);
-   }
    delete[] mBuffer;
    delete[] mTemp;
    delete[] mInputTrack;
@@ -386,12 +372,12 @@ void Mixer::ApplyTrackGains(bool apply)
 void Mixer::Clear()
 {
    for (int c = 0; c < mNumBuffers; c++) {
-      memset(mTemp[c], 0, mInterleavedBufferSize * SAMPLE_SIZE(floatSample));
+      memset(mTemp[c].ptr(), 0, mInterleavedBufferSize * SAMPLE_SIZE(floatSample));
    }
 }
 
 void MixBuffers(int numChannels, int *channelFlags, float *gains,
-                samplePtr src, samplePtr *dests,
+                samplePtr src, SampleBuffer *dests,
                 int len, bool interleaved)
 {
    for (int c = 0; c < numChannels; c++) {
@@ -402,10 +388,10 @@ void MixBuffers(int numChannels, int *channelFlags, float *gains,
       int skip;
 
       if (interleaved) {
-         destPtr = dests[0] + c*SAMPLE_SIZE(floatSample);
+         destPtr = dests[0].ptr() + c*SAMPLE_SIZE(floatSample);
          skip = numChannels;
       } else {
-         destPtr = dests[c];
+         destPtr = dests[c].ptr();
          skip = 1;
       }
 
@@ -419,17 +405,18 @@ void MixBuffers(int numChannels, int *channelFlags, float *gains,
    }
 }
 
-sampleCount Mixer::MixVariableRates(int *channelFlags, WaveTrack *track,
+sampleCount Mixer::MixVariableRates(int *channelFlags, WaveTrackCache &cache,
                                     sampleCount *pos, float *queue,
                                     int *queueStart, int *queueLen,
                                     Resample * pResample)
 {
+   const WaveTrack *const track = cache.GetTrack();
    const double trackRate = track->GetRate();
    const double initialWarp = mRate / mSpeed / trackRate;
    const double tstep = 1.0 / trackRate;
    int sampleSize = SAMPLE_SIZE(floatSample);
 
-   sampleCount out = 0;
+   decltype(mMaxOut) out = 0;
 
    /* time is floating point. Sample rate is integer. The number of samples
     * has to be integer, but the multiplication gives a float result, which we
@@ -445,11 +432,11 @@ sampleCount Mixer::MixVariableRates(int *channelFlags, WaveTrack *track,
    // Find the last sample
    double endTime = track->GetEndTime();
    double startTime = track->GetStartTime();
-   const sampleCount endPos =
-      track->TimeToLongSamples(std::max(startTime, std::min(endTime, mT1)));
-   const sampleCount startPos =
-      track->TimeToLongSamples(std::max(startTime, std::min(endTime, mT0)));
-   const bool backwards = (endPos < startPos);
+   const bool backwards = (mT1 < mT0);
+   const double tEnd = backwards
+      ? std::max(startTime, mT1)
+      : std::min(endTime, mT1);
+   const auto endPos = track->TimeToLongSamples(tEnd);
    // Find the time corresponding to the start of the queue, for use with time track
    double t = (*pos + (backwards ? *queueLen : - *queueLen)) / trackRate;
 
@@ -459,52 +446,47 @@ sampleCount Mixer::MixVariableRates(int *channelFlags, WaveTrack *track,
          memmove(queue, &queue[*queueStart], (*queueLen) * sampleSize);
          *queueStart = 0;
 
-         int getLen =
-            std::min((backwards ? *pos - endPos : endPos - *pos),
-                      sampleCount(mQueueMaxLen - *queueLen));
+         auto getLen = limitSampleBufferSize(
+            mQueueMaxLen - *queueLen,
+            backwards ? *pos - endPos : endPos - *pos
+         );
 
          // Nothing to do if past end of play interval
          if (getLen > 0) {
             if (backwards) {
-               track->Get((samplePtr)&queue[*queueLen],
-                          floatSample,
-                          *pos - (getLen - 1),
-                          getLen);
+               auto results = cache.Get(floatSample, *pos - (getLen - 1), getLen);
+               memcpy(&queue[*queueLen], results, sizeof(float) * getLen);
 
                track->GetEnvelopeValues(mEnvValues,
                                         getLen,
-                                        (*pos - (getLen- 1)) / trackRate,
-                                        tstep);
+                                        (*pos - (getLen- 1)) / trackRate);
 
                *pos -= getLen;
             }
             else {
-               track->Get((samplePtr)&queue[*queueLen],
-                          floatSample,
-                          *pos,
-                          getLen);
+               auto results = cache.Get(floatSample, *pos, getLen);
+               memcpy(&queue[*queueLen], results, sizeof(float) * getLen);
 
                track->GetEnvelopeValues(mEnvValues,
                                         getLen,
-                                        (*pos) / trackRate,
-                                        tstep);
+                                        (*pos) / trackRate);
 
                *pos += getLen;
             }
 
-            for (int i = 0; i < getLen; i++) {
+            for (decltype(getLen) i = 0; i < getLen; i++) {
                queue[(*queueLen) + i] *= mEnvValues[i];
             }
 
             if (backwards)
                ReverseSamples((samplePtr)&queue[0], floatSample,
-                              *queueStart, getLen);
+                              *queueLen, getLen);
 
             *queueLen += getLen;
          }
       }
 
-      sampleCount thisProcessLen = mProcessLen;
+      auto thisProcessLen = mProcessLen;
       bool last = (*queueLen < mProcessLen);
       if (last) {
          thisProcessLen = *queueLen;
@@ -569,17 +551,19 @@ sampleCount Mixer::MixVariableRates(int *channelFlags, WaveTrack *track,
    return out;
 }
 
-sampleCount Mixer::MixSameRate(int *channelFlags, WaveTrack *track,
+sampleCount Mixer::MixSameRate(int *channelFlags, WaveTrackCache &cache,
                                sampleCount *pos)
 {
-   int slen = mMaxOut;
+   const WaveTrack *const track = cache.GetTrack();
+   auto slen = mMaxOut;
    int c;
    const double t = *pos / track->GetRate();
    const double trackEndTime = track->GetEndTime();
    const double trackStartTime = track->GetStartTime();
-   const double tEnd = std::max(trackStartTime, std::min(trackEndTime, mT1));
-   const double tStart = std::max(trackStartTime, std::min(trackEndTime, mT0));
-   const bool backwards = (tEnd < tStart);
+   const bool backwards = (mT1 < mT0);
+   const double tEnd = backwards
+      ? std::max(trackStartTime, mT1)
+      : std::min(trackEndTime, mT1);
 
    //don't process if we're at the end of the selection or track.
    if ((backwards ? t <= tEnd : t >= tEnd))
@@ -597,9 +581,12 @@ sampleCount Mixer::MixSameRate(int *channelFlags, WaveTrack *track,
    if (slen > mMaxOut)
       slen = mMaxOut;
 
+   wxASSERT(slen >= 0);
+
    if (backwards) {
-      track->Get((samplePtr)mFloatBuffer, floatSample, *pos - (slen - 1), slen);
-      track->GetEnvelopeValues(mEnvValues, slen, t - (slen - 1) / mRate, 1.0 / mRate);
+      auto results = cache.Get(floatSample, *pos - (slen - 1), slen);
+      memcpy(mFloatBuffer, results, sizeof(float) * slen);
+      track->GetEnvelopeValues(mEnvValues, slen, t - (slen - 1) / mRate);
       for(int i=0; i<slen; i++)
          mFloatBuffer[i] *= mEnvValues[i]; // Track gain control will go here?
       ReverseSamples((samplePtr)mFloatBuffer, floatSample, 0, slen);
@@ -607,8 +594,9 @@ sampleCount Mixer::MixSameRate(int *channelFlags, WaveTrack *track,
       *pos -= slen;
    }
    else {
-      track->Get((samplePtr)mFloatBuffer, floatSample, *pos, slen);
-      track->GetEnvelopeValues(mEnvValues, slen, t, 1.0 / mRate);
+      auto results = cache.Get(floatSample, *pos, slen);
+      memcpy(mFloatBuffer, results, sizeof(float) * slen);
+      track->GetEnvelopeValues(mEnvValues, slen, t);
       for(int i=0; i<slen; i++)
          mFloatBuffer[i] *= mEnvValues[i]; // Track gain control will go here?
 
@@ -635,14 +623,14 @@ sampleCount Mixer::Process(sampleCount maxToProcess)
    //   return 0;
 
    int i, j;
-   sampleCount maxOut = 0;
+   decltype(Process(0)) maxOut = 0;
    int *channelFlags = new int[mNumChannels];
 
    mMaxOut = maxToProcess;
 
    Clear();
    for(i=0; i<mNumInputTracks; i++) {
-      WaveTrack *track = mInputTrack[i];
+      const WaveTrack *const track = mInputTrack[i].GetTrack();
       for(j=0; j<mNumChannels; j++)
          channelFlags[j] = 0;
 
@@ -671,24 +659,26 @@ sampleCount Mixer::Process(sampleCount maxToProcess)
       }
       if (mbVariableRates || track->GetRate() != mRate)
          maxOut = std::max(maxOut,
-         MixVariableRates(channelFlags, track,
-         &mSamplePos[i], mSampleQueue[i],
-         &mQueueStart[i], &mQueueLen[i], mResample[i]));
+            MixVariableRates(channelFlags, mInputTrack[i],
+               &mSamplePos[i], mSampleQueue[i],
+               &mQueueStart[i], &mQueueLen[i], mResample[i]));
       else
          maxOut = std::max(maxOut,
-         MixSameRate(channelFlags, track, &mSamplePos[i]));
+            MixSameRate(channelFlags, mInputTrack[i], &mSamplePos[i]));
 
       double t = (double)mSamplePos[i] / (double)track->GetRate();
       if (mT0 > mT1)
-         mTime = std::max(t, mT1);
+         // backwards (as possibly in scrubbing)
+         mTime = std::max(std::min(t, mTime), mT1);
       else
-         mTime = std::min(t, mT1);
+         // forwards (the usual)
+         mTime = std::min(std::max(t, mTime), mT1);
    }
    if(mInterleaved) {
       for(int c=0; c<mNumChannels; c++) {
-         CopySamples(mTemp[0] + (c * SAMPLE_SIZE(floatSample)),
+         CopySamples(mTemp[0].ptr() + (c * SAMPLE_SIZE(floatSample)),
             floatSample,
-            mBuffer[0] + (c * SAMPLE_SIZE(mFormat)),
+            mBuffer[0].ptr() + (c * SAMPLE_SIZE(mFormat)),
             mFormat,
             maxOut,
             mHighQuality,
@@ -698,9 +688,9 @@ sampleCount Mixer::Process(sampleCount maxToProcess)
    }
    else {
       for(int c=0; c<mNumBuffers; c++) {
-         CopySamples(mTemp[c],
+         CopySamples(mTemp[c].ptr(),
             floatSample,
-            mBuffer[c],
+            mBuffer[c].ptr(),
             mFormat,
             maxOut,
             mHighQuality);
@@ -716,12 +706,12 @@ sampleCount Mixer::Process(sampleCount maxToProcess)
 
 samplePtr Mixer::GetBuffer()
 {
-   return mBuffer[0];
+   return mBuffer[0].ptr();
 }
 
 samplePtr Mixer::GetBuffer(int channel)
 {
-   return mBuffer[channel];
+   return mBuffer[channel].ptr();
 }
 
 double Mixer::MixGetCurrentTime()
@@ -736,7 +726,7 @@ void Mixer::Restart()
    mTime = mT0;
 
    for(i=0; i<mNumInputTracks; i++)
-      mSamplePos[i] = mInputTrack[i]->TimeToLongSamples(mT0);
+      mSamplePos[i] = mInputTrack[i].GetTrack()->TimeToLongSamples(mT0);
 
    for(i=0; i<mNumInputTracks; i++) {
       mQueueStart[i] = 0;
@@ -756,7 +746,7 @@ void Mixer::Reposition(double t)
       mTime = std::max(mT0, (std::min(mT1, mTime)));
 
    for(i=0; i<mNumInputTracks; i++) {
-      mSamplePos[i] = mInputTrack[i]->TimeToLongSamples(mTime);
+      mSamplePos[i] = mInputTrack[i].GetTrack()->TimeToLongSamples(mTime);
       mQueueStart[i] = 0;
       mQueueLen[i] = 0;
    }
@@ -764,7 +754,7 @@ void Mixer::Reposition(double t)
 
 void Mixer::SetTimesAndSpeed(double t0, double t1, double speed)
 {
-   wxASSERT(isfinite(speed));
+   wxASSERT(std::isfinite(speed));
    mT0 = t0;
    mT1 = t1;
    mSpeed = fabs(speed);

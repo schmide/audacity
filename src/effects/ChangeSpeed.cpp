@@ -14,12 +14,12 @@
 *//*******************************************************************/
 
 #include "../Audacity.h"
+#include "ChangeSpeed.h"
 
 #include <math.h>
 
 #include <wx/intl.h>
 
-#include "../Envelope.h"
 #include "../LabelTrack.h"
 #include "../Prefs.h"
 #include "../Project.h"
@@ -27,9 +27,8 @@
 #include "../ShuttleGui.h"
 #include "../widgets/valnum.h"
 
-#include "ChangeSpeed.h"
-
 #include "TimeWarper.h"
+#include "../WaveTrack.h"
 
 enum
 {
@@ -96,6 +95,8 @@ EffectChangeSpeed::EffectChangeSpeed()
    mToLength = 0.0;
    mFormat = _("hh:mm:ss + milliseconds");
    mbLoopDetect = false;
+
+   SetLinearEffectFlag(true);
 }
 
 EffectChangeSpeed::~EffectChangeSpeed()
@@ -217,7 +218,7 @@ bool EffectChangeSpeed::Process()
    CopyInputTracks(Track::All); // Set up mOutputTracks.
    bool bGoodResult = true;
 
-   TrackListIterator iter(mOutputTracks);
+   TrackListIterator iter(mOutputTracks.get());
    Track* t;
    mCurTrackNum = 0;
    mMaxNewLength = 0.0;
@@ -251,8 +252,8 @@ bool EffectChangeSpeed::Process()
          // Process only if the right marker is to the right of the left marker
          if (mCurT1 > mCurT0) {
             //Transform the marker timepoints to samples
-            sampleCount start = pOutWaveTrack->TimeToLongSamples(mCurT0);
-            sampleCount end = pOutWaveTrack->TimeToLongSamples(mCurT1);
+            auto start = pOutWaveTrack->TimeToLongSamples(mCurT0);
+            auto end = pOutWaveTrack->TimeToLongSamples(mCurT1);
 
             //ProcessOne() (implemented below) processes a single track
             if (!ProcessOne(pOutWaveTrack, start, end))
@@ -361,7 +362,7 @@ void EffectChangeSpeed::PopulateOrExchange(ShuttleGui & S)
          {
             S.AddPrompt(_("Current Length:"));
 
-            mpFromLengthCtrl = new
+            mpFromLengthCtrl = safenew
                   NumericTextCtrl(NumericConverter::TIME,
                                  S.GetParent(),
                                  wxID_ANY,
@@ -377,7 +378,7 @@ void EffectChangeSpeed::PopulateOrExchange(ShuttleGui & S)
 
             S.AddPrompt(_("New Length:"));
 
-            mpToLengthCtrl = new
+            mpToLengthCtrl = safenew
                   NumericTextCtrl(NumericConverter::TIME,
                                  S.GetParent(),
                                  ID_ToLength,
@@ -434,10 +435,13 @@ bool EffectChangeSpeed::TransferDataToWindow()
 
 bool EffectChangeSpeed::TransferDataFromWindow()
 {
+   // mUIParent->TransferDataFromWindow() loses some precision, so save and restore it.
+   double exactPercent = m_PercentChange;
    if (!mUIParent->Validate() || !mUIParent->TransferDataFromWindow())
    {
       return false;
    }
+   m_PercentChange = exactPercent;
 
    SetPrivateConfig(GetCurrentSettingsGroup(), wxT("TimeFormat"), mFormat);
    SetPrivateConfig(GetCurrentSettingsGroup(), wxT("VinylChoice"), mFromVinyl);
@@ -451,8 +455,8 @@ bool EffectChangeSpeed::TransferDataFromWindow()
 // the region are shifted along according to how the region size changed.
 bool EffectChangeSpeed::ProcessLabelTrack(Track *t)
 {
-   SetTimeWarper(new RegionTimeWarper(mT0, mT1,
-                     new LinearTimeWarper(mT0, mT0,
+   SetTimeWarper(std::make_unique<RegionTimeWarper>(mT0, mT1,
+                     std::make_unique<LinearTimeWarper>(mT0, mT0,
                          mT1, mT0 + (mT1-mT0)*mFactor)));
    LabelTrack *lt = (LabelTrack*)t;
    if (lt == NULL) return false;
@@ -471,7 +475,7 @@ bool EffectChangeSpeed::ProcessOne(WaveTrack * track,
    // initialization, per examples of Mixer::Mixer and
    // EffectSoundTouch::ProcessOne
 
-   WaveTrack * outputTrack = mFactory->NewWaveTrack(track->GetSampleFormat(),
+   auto outputTrack = mFactory->NewWaveTrack(track->GetSampleFormat(),
                                                     track->GetRate());
 
    //Get the length of the selection (as double). len is
@@ -481,11 +485,11 @@ bool EffectChangeSpeed::ProcessOne(WaveTrack * track,
 
    // Initiate processing buffers, most likely shorter than
    // the length of the selection being processed.
-   sampleCount inBufferSize = track->GetMaxBlockSize();
+   auto inBufferSize = track->GetMaxBlockSize();
 
    float * inBuffer = new float[inBufferSize];
 
-   sampleCount outBufferSize =
+   auto outBufferSize =
       (sampleCount)((mFactor * inBufferSize) + 10);
    float * outBuffer = new float[outBufferSize];
 
@@ -495,15 +499,13 @@ bool EffectChangeSpeed::ProcessOne(WaveTrack * track,
    //Go through the track one buffer at a time. samplePos counts which
    //sample the current buffer starts at.
    bool bResult = true;
-   sampleCount blockSize;
-   sampleCount samplePos = start;
+   auto samplePos = start;
    while (samplePos < end) {
       //Get a blockSize of samples (smaller than the size of the buffer)
-      blockSize = track->GetBestBlockSize(samplePos);
-
-      //Adjust the block size if it is the final block in the track
-      if (samplePos + blockSize > end)
-         blockSize = end - samplePos;
+      auto blockSize = limitSampleBufferSize(
+         track->GetBestBlockSize(samplePos),
+         end - samplePos
+      );
 
       //Get the samples from the track and put them in the buffer
       track->Get((samplePtr) inBuffer, floatSample, samplePos, blockSize);
@@ -547,15 +549,12 @@ bool EffectChangeSpeed::ProcessOne(WaveTrack * track,
    double newLength = outputTrack->GetEndTime();
    if (bResult)
    {
-      SetTimeWarper(new LinearTimeWarper(mCurT0, mCurT0, mCurT1, mCurT0 + newLength));
-      bResult = track->ClearAndPaste(mCurT0, mCurT1, outputTrack, true, false, GetTimeWarper());
+      SetTimeWarper(std::make_unique<LinearTimeWarper>(mCurT0, mCurT0, mCurT1, mCurT0 + newLength));
+      bResult = track->ClearAndPaste(mCurT0, mCurT1, outputTrack.get(), true, false, GetTimeWarper());
    }
 
    if (newLength > mMaxNewLength)
       mMaxNewLength = newLength;
-
-   // Delete the outputTrack now that its data is inserted in place
-   delete outputTrack;
 
    return bResult;
 }
@@ -625,7 +624,7 @@ void EffectChangeSpeed::OnChoice_Vinyl(wxCommandEvent & WXUNUSED(evt))
       SetPrivateConfig(GetCurrentSettingsGroup(), wxT("VinylChoice"), mFromVinyl);
    }
 
-   // If mFromVinyl & mToVinyl are set, then there's a new percent change.
+   // If mFromVinyl & mToVinyl are set, then there's a NEW percent change.
    if ((mFromVinyl != kVinyl_NA) && (mToVinyl != kVinyl_NA))
    {
       double fromRPM;

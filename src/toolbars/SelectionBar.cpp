@@ -46,10 +46,10 @@ with changes in the SelectionBar.
 #include "SelectionBarListener.h"
 #include "SelectionBar.h"
 
-#include "../AudacityApp.h"
 #include "../AudioIO.h"
 #include "../AColor.h"
 #include "../Prefs.h"
+#include "../Project.h"
 #include "../Snap.h"
 #include "../widgets/NumericTextCtrl.h"
 
@@ -110,11 +110,19 @@ void SelectionBar::Create(wxWindow * parent)
 
 void SelectionBar::Populate()
 {
+   mLeftTime = mRightTime = mAudioTime = nullptr;
+
    // This will be inherited by all children:
-   SetFont(wxFont(9, wxFONTFAMILY_SWISS, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
+   SetFont(wxFont(
+#ifdef __WXMAC__
+                  12
+#else
+                  9
+#endif
+                  ,
+                  wxFONTFAMILY_SWISS, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
 
    wxFlexGridSizer *mainSizer;
-   wxBoxSizer *hSizer;
 
    /* we don't actually need a control yet, but we want to use it's methods
     * to do some look-ups, so we'll have to create one. We can't make the
@@ -122,14 +130,13 @@ void SelectionBar::Populate()
     * runtime */
    wxString formatName = mListener ? mListener->AS_GetSelectionFormat() : wxString(wxEmptyString);
 
-   mainSizer = new wxFlexGridSizer(7, 1, 1);
-   Add(mainSizer, 0, wxALIGN_CENTER_VERTICAL);
+   Add((mainSizer = safenew wxFlexGridSizer(7, 1, 1)), 0, wxALIGN_CENTER_VERTICAL);
 
    //
    // Top row (mostly labels)
    //
 
-   mainSizer->Add(new wxStaticText(this, -1, _("Project Rate (Hz):"),
+   mainSizer->Add(safenew wxStaticText(this, -1, _("Project Rate (Hz):"),
    // LLL:  On my Ubuntu 7.04 install, the label wraps to two lines
    //       and I could not figure out why.  Thus...hackage.
 #if defined(__WXGTK__)
@@ -141,52 +148,54 @@ void SelectionBar::Populate()
 
    mainSizer->Add(5, 1);
 
-   mainSizer->Add(new wxStaticText(this, -1, _("Snap To:")),
+   mainSizer->Add(safenew wxStaticText(this, -1, _("Snap To:")),
                0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 5);
 
-   mainSizer->Add(new wxStaticText(this, -1, _("Selection Start:")),
+   mainSizer->Add(safenew wxStaticText(this, -1, _("Selection Start:")),
                0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 5);
 
    bool showSelectionLength = false;
    gPrefs->Read(wxT("/ShowSelectionLength"), &showSelectionLength);
 
-   hSizer = new wxBoxSizer(wxHORIZONTAL);
-   mRightEndButton = new wxRadioButton(this, OnEndRadioID, _("End"),
-                                       wxDefaultPosition, wxDefaultSize,
-                                       wxRB_GROUP);
-   mRightEndButton->SetName(_("End"));
-   mRightEndButton->SetValue(!showSelectionLength);
-   hSizer->Add(mRightEndButton,
-               0, wxRIGHT | wxALIGN_CENTER_VERTICAL, 5);
-   mRightLengthButton = new wxRadioButton(this, OnLengthRadioID, _("Length"));
-   mRightLengthButton->SetName(_("Length"));
-   mRightLengthButton->SetValue(showSelectionLength);
-   hSizer->Add(mRightLengthButton,
-               0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 5);
+   {
+      auto hSizer = std::make_unique<wxBoxSizer>(wxHORIZONTAL);
+      mRightEndButton = safenew wxRadioButton(this, OnEndRadioID, _("End"),
+         wxDefaultPosition, wxDefaultSize,
+         wxRB_GROUP);
+      mRightEndButton->SetName(_("End"));
+      mRightEndButton->SetValue(!showSelectionLength);
+      hSizer->Add(mRightEndButton,
+         0, wxRIGHT | wxALIGN_CENTER_VERTICAL, 5);
+      mRightLengthButton = safenew wxRadioButton(this, OnLengthRadioID, _("Length"));
+      mRightLengthButton->SetName(_("Length"));
+      mRightLengthButton->SetValue(showSelectionLength);
+      hSizer->Add(mRightLengthButton,
+         0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 5);
 #if defined(__WXMSW__)
       // Refer to Microsoft KB article 261192 for an explanation as
       // to why this is needed.  We've only experienced it under Win2k
       // so it's probably been fixed.  But, it doesn't hurt to have this
       // in for all versions.
       wxRadioButton* dummyButton =
-         new wxRadioButton(this, wxID_ANY, _("hidden"),
-                           wxDefaultPosition, wxDefaultSize,
-                           wxRB_GROUP);
+         safenew wxRadioButton(this, wxID_ANY, _("hidden"),
+         wxDefaultPosition, wxDefaultSize,
+         wxRB_GROUP);
       dummyButton->Disable();
       dummyButton->Hide();
 #endif
-   mainSizer->Add(hSizer, 0,  wxALIGN_CENTER_VERTICAL | wxRIGHT, 0);
+      mainSizer->Add(hSizer.release(), 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 0);
+   }
 
    mainSizer->Add(5, 1);
 
-   mainSizer->Add(new wxStaticText(this, -1, _("Audio Position:")),
+   mainSizer->Add(safenew wxStaticText(this, -1, _("Audio Position:")),
                   0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 0);
 
    //
    // Middle row (mostly time controls)
    //
 
-   mRateBox = new wxComboBox(this, OnRateID,
+   mRateBox = safenew wxComboBox(this, OnRateID,
                              wxT(""),
                              wxDefaultPosition, wxSize(80, -1));
    mRateBox->SetName(_("Project Rate (Hz):"));
@@ -226,21 +235,18 @@ void SelectionBar::Populate()
 
    mainSizer->Add(mRateBox, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 5);
 
-   mainSizer->Add(new wxStaticLine(this, -1, wxDefaultPosition,
+   mainSizer->Add(safenew wxStaticLine(this, -1, wxDefaultPosition,
                                    wxSize(1, toolbarSingle),
                                    wxLI_VERTICAL),
                   0,  wxRIGHT, 5);
 
-   mSnapTo = new wxChoice(this, OnSnapToID,
+   mSnapTo = safenew wxChoice(this, OnSnapToID,
                           wxDefaultPosition, wxDefaultSize,
                           SnapManager::GetSnapLabels());
    mainSizer->Add(mSnapTo,
                   0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 5);
    mSnapTo->SetName(_("Snap To"));
    mSnapTo->SetSelection(mListener ? mListener->AS_GetSnapTo() : SNAP_OFF);
-   #if wxUSE_TOOLTIPS
-      mSnapTo->SetToolTip(wxString::Format(_("Snap Clicks/Selections to %s"), formatName.c_str()));
-   #endif
 
    mSnapTo->Connect(wxEVT_SET_FOCUS,
                     wxFocusEventHandler(SelectionBar::OnFocus),
@@ -251,13 +257,13 @@ void SelectionBar::Populate()
                     NULL,
                     this);
 
-   mLeftTime = new NumericTextCtrl(
+   mLeftTime = safenew NumericTextCtrl(
       NumericConverter::TIME, this, OnLeftTimeID, formatName, 0.0, mRate);
    mLeftTime->SetName(_("Selection Start:"));
    mLeftTime->EnableMenu();
    mainSizer->Add(mLeftTime, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 5);
 
-   mRightTime = new NumericTextCtrl(
+   mRightTime = safenew NumericTextCtrl(
       NumericConverter::TIME, this, OnRightTimeID, formatName, 0.0, mRate);
    mRightTime->SetName(wxString(_("Selection ")) + (showSelectionLength ?
                                                    _("Length") :
@@ -265,18 +271,20 @@ void SelectionBar::Populate()
    mRightTime->EnableMenu();
    mainSizer->Add(mRightTime, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 5);
 
-   mainSizer->Add(new wxStaticLine(this, -1, wxDefaultPosition,
+   mainSizer->Add(safenew wxStaticLine(this, -1, wxDefaultPosition,
                                    wxSize(1, toolbarSingle),
                                    wxLI_VERTICAL),
                   0, wxRIGHT, 5);
 
-   mAudioTime = new NumericTextCtrl(
+   mAudioTime = safenew NumericTextCtrl(
       NumericConverter::TIME, this, wxID_ANY, formatName, 0.0, mRate);
    mAudioTime->SetName(_("Audio Position:"));
    mAudioTime->EnableMenu();
    mainSizer->Add(mAudioTime, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 0);
 
    mainSizer->Layout();
+
+   RegenerateTooltips();
 
    Layout();
 
@@ -294,6 +302,8 @@ void SelectionBar::UpdatePrefs()
    // Set label to pull in language change
    SetLabel(_("Selection"));
 
+   RegenerateTooltips();
+
    // Give base class a chance
    ToolBar::UpdatePrefs();
 }
@@ -305,6 +315,14 @@ void SelectionBar::SetListener(SelectionBarListener *l)
    SetSnapTo(mListener->AS_GetSnapTo());
    SetSelectionFormat(mListener->AS_GetSelectionFormat());
 };
+
+void SelectionBar::RegenerateTooltips()
+{
+#if wxUSE_TOOLTIPS
+   wxString formatName = mListener ? mListener->AS_GetSelectionFormat() : wxString(wxEmptyString);
+   mSnapTo->SetToolTip(wxString::Format(_("Snap Clicks/Selections to %s"), formatName.c_str()));
+#endif
+}
 
 void SelectionBar::OnSize(wxSizeEvent &evt)
 {
@@ -373,9 +391,7 @@ void SelectionBar::OnUpdate(wxCommandEvent &evt)
    format = mLeftTime->GetBuiltinName(index);
    mListener->AS_SetSelectionFormat(format);
 
-#if wxUSE_TOOLTIPS
-   mSnapTo->SetToolTip(wxString::Format(_("Snap Clicks/Selections to %s"), format.c_str()));
-#endif
+   RegenerateTooltips();
 
    // ToolBar::ReCreateButtons() will get rid of our sizers and controls
    // so reset pointers first.
@@ -521,13 +537,12 @@ void SelectionBar::UpdateRates()
 
 void SelectionBar::OnFocus(wxFocusEvent &event)
 {
-   wxCommandEvent e(EVT_CAPTURE_KEYBOARD);
-
    if (event.GetEventType() == wxEVT_KILL_FOCUS) {
-      e.SetEventType(EVT_RELEASE_KEYBOARD);
+      AudacityProject::ReleaseKeyboard(this);
    }
-   e.SetEventObject(this);
-   GetParent()->GetEventHandler()->ProcessEvent(e);
+   else {
+      AudacityProject::CaptureKeyboard(this);
+   }
 
    Refresh(false);
 
@@ -539,11 +554,6 @@ void SelectionBar::OnCaptureKey(wxCommandEvent &event)
    wxKeyEvent *kevent = (wxKeyEvent *)event.GetEventObject();
    wxWindow *w = FindFocus();
    int keyCode = kevent->GetKeyCode();
-
-   // Pass the SPACE through for SnapTo
-   if (w == mSnapTo && keyCode == WXK_SPACE) {
-      return;
-   }
 
    // Convert numeric keypad entries.
    if ((keyCode >= WXK_NUMPAD0) && (keyCode <= WXK_NUMPAD9)) {

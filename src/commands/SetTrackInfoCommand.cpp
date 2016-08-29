@@ -27,19 +27,19 @@ wxString SetTrackInfoCommandType::BuildName()
 
 void SetTrackInfoCommandType::BuildSignature(CommandSignature &signature)
 {
-   IntValidator *trackIndexValidator = new IntValidator();
-   signature.AddParameter(wxT("TrackIndex"), 0, trackIndexValidator);
+   auto trackIndexValidator = make_movable<IntValidator>();
+   signature.AddParameter(wxT("TrackIndex"), 0, std::move(trackIndexValidator));
 
-   OptionValidator *infoTypeValidator = new OptionValidator();
+   auto infoTypeValidator = make_movable<OptionValidator>();
    infoTypeValidator->AddOption(wxT("Name"));
-   signature.AddParameter(wxT("Type"), wxT("Name"), infoTypeValidator);
-   Validator *nameValidator = new Validator();
-   signature.AddParameter(wxT("Name"), wxT("Unnamed"), nameValidator);
+   signature.AddParameter(wxT("Type"), wxT("Name"), std::move(infoTypeValidator));
+   auto nameValidator = make_movable<DefaultValidator>();
+   signature.AddParameter(wxT("Name"), wxT("Unnamed"), std::move(nameValidator));
 }
 
-Command *SetTrackInfoCommandType::Create(CommandOutputTarget *target)
+CommandHolder SetTrackInfoCommandType::Create(std::unique_ptr<CommandOutputTarget> &&target)
 {
-   return new SetTrackInfoCommand(*this, target);
+   return std::make_shared<SetTrackInfoCommand>(*this, std::move(target));
 }
 
 bool SetTrackInfoCommand::Apply(CommandExecutionContext context)
@@ -50,7 +50,7 @@ bool SetTrackInfoCommand::Apply(CommandExecutionContext context)
 
    // (Note: track selection ought to be somewhere else)
    long i = 0;
-   TrackListIterator iter(context.proj->GetTracks());
+   TrackListIterator iter(context.GetProject()->GetTracks());
    Track *t = iter.First();
    while (t && i != trackIndex)
    {

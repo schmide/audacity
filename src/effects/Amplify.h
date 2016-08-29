@@ -21,13 +21,13 @@
 #include <wx/string.h>
 #include <wx/textctrl.h>
 
-#include "../ShuttleGui.h"
-
 #include "Effect.h"
 
 #define AMPLIFY_PLUGIN_SYMBOL XO("Amplify")
 
-class EffectAmplify : public Effect
+class ShuttleGui;
+
+class EffectAmplify final : public Effect
 {
 public:
    EffectAmplify();
@@ -35,27 +35,29 @@ public:
 
    // IdentInterface implementation
 
-   virtual wxString GetSymbol();
-   virtual wxString GetDescription();
+   wxString GetSymbol() override;
+   wxString GetDescription() override;
 
    // EffectIdentInterface implementation
 
-   virtual EffectType GetType();
+   EffectType GetType() override;
 
    // EffectClientInterface implementation
 
-   virtual int GetAudioInCount();
-   virtual int GetAudioOutCount();
-   virtual sampleCount ProcessBlock(float **inBlock, float **outBlock, sampleCount blockLen);
-   virtual bool GetAutomationParameters(EffectAutomationParameters & parms);
-   virtual bool SetAutomationParameters(EffectAutomationParameters & parms);
+   int GetAudioInCount() override;
+   int GetAudioOutCount() override;
+   sampleCount ProcessBlock(float **inBlock, float **outBlock, sampleCount blockLen) override;
+   bool GetAutomationParameters(EffectAutomationParameters & parms) override;
+   bool SetAutomationParameters(EffectAutomationParameters & parms) override;
+   bool LoadFactoryDefaults() override;
 
    // Effect implementation
 
-   virtual bool Init();
-   virtual void PopulateOrExchange(ShuttleGui & S);
-   virtual bool TransferDataToWindow();
-   virtual bool TransferDataFromWindow();
+   bool Init() override;
+   void Preview(bool dryOnly) override;
+   void PopulateOrExchange(ShuttleGui & S) override;
+   bool TransferDataToWindow() override;
+   bool TransferDataFromWindow() override;
 
 private:
    // EffectAmplify implementation
@@ -67,12 +69,12 @@ private:
    void CheckClip();
 
 private:
-   float mPeak;
-   bool mTracksAnalyzed;
+   double mPeak;
 
-   float mRatio;
-   float mAmp;
-   float mNewPeak;
+   double mRatio;
+   double mRatioClip;   // maximum value of mRatio which does not cause clipping
+   double mAmp;
+   double mNewPeak;
    bool mCanClip;
 
    wxSlider *mAmpS;

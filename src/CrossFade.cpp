@@ -73,18 +73,12 @@ bool CrossFader::CrossFadeMix(samplePtr buffer, sampleFormat format, sampleCount
    //we should use one of the size len, because this has already
    //been determined to be good in Mixer
 
-   //Get a pointer to the sequence in each clip.
-   WaveClip * tmpclip = NULL;
-
-   WaveClipList::compatibility_iterator  it;
-
-
    //Go through each clip, adding it to the total in the appropriate way.
 
    //this could be 'optimized' by getting all of the sequences and then
    //iterating through each of them.
 
-   int numclips = mClips.GetCount();
+   int numclips = mClips.size();
 
    //create vectors to store the important info for each clip.
    std::vector<sampleCount> clipStart(numclips);
@@ -94,10 +88,8 @@ bool CrossFader::CrossFadeMix(samplePtr buffer, sampleFormat format, sampleCount
 
    unsigned int i = 0;
    //Now, go through the clips and load up the vectors.
-   for(it = mClips.GetFirst(); it; it = it->GetNext())
+   for(const auto &tmpclip: mClips)
    {
-
-      tmpclip = it->GetData();
       tmpSequence[i] = tmpclip->GetSequence();
 
 
@@ -130,8 +122,9 @@ bool CrossFader::CrossFadeMix(samplePtr buffer, sampleFormat format, sampleCount
       short *dest = (short *)buffer;
       vector<short*> shortSeq;
 
-      //Copy the sequences over to the new vector, casting as you go.
+      //Copy the sequences over to the NEW vector, casting as you go.
       for(int i = 0; i < numclips; i++)
+         // PRL: what the ... ?  This cast is just wrong!
          shortSeq.push_back((short*)tmpSequence[i]);
 
 
@@ -149,6 +142,8 @@ bool CrossFader::CrossFadeMix(samplePtr buffer, sampleFormat format, sampleCount
             if(j + clipStart[i] >= 0 &&
                clipStart[i]+len < clipLength[i])//only copy if we are within the clip
             {
+               // UNSAFE_SAMPLE_COUNT_TRUNCATION
+               // -- but class CrossFader is not used as of this writing
                f += shortSeq[i][j+ clipStart[i]];
                clips++;
             }
@@ -177,8 +172,10 @@ bool CrossFader::CrossFadeMix(samplePtr buffer, sampleFormat format, sampleCount
       vector<int *> intSeq;
 
 
-      //Copy the sequences over to the new vector, casting as you go.
+      //Copy the sequences over to the NEW vector, casting as you go.
       for(int i = 0; i < numclips; i++)
+         // Murder most foul!  As in the best it is,
+         // But this most foul, strange, and unnatural.
          intSeq.push_back((int*)tmpSequence[i]);
 
       int clips=0;
@@ -195,6 +192,8 @@ bool CrossFader::CrossFadeMix(samplePtr buffer, sampleFormat format, sampleCount
             //only copy if we are within the clip
             if(j + clipStart[i] >= 0 && clipStart[i] + len < clipLength[i])
             {
+               // UNSAFE_SAMPLE_COUNT_TRUNCATION
+               // -- but class CrossFader is not used as of this writing
                f+= intSeq[i][j+clipStart[i]];
                clips++;
             }
@@ -239,6 +238,11 @@ bool CrossFader::CrossFadeMix(samplePtr buffer, sampleFormat format, sampleCount
             if(j + clipStart[i] >= 0 &&
                clipStart[i] + j < clipLength[i])//only copy if we are within the clip
             {
+               // UNSAFE_SAMPLE_COUNT_TRUNCATION
+               // -- but class CrossFader is not used as of this writing
+               // -- hey wait, you never even tried to initialize floatSeq,
+               // not even with bad casts!!!
+               // Subscripts out of bounds, bombs away!!!
                f += floatSeq[i][j + clipStart[i]];
                clips++;
             }
@@ -271,13 +275,7 @@ bool CrossFader::CrossFadeMix(samplePtr buffer, sampleFormat format, sampleCount
 }
 
 
-void CrossFader::AddClip( WaveClip * clip)
-{
-   mClips.Append(clip);
-}
-
 void CrossFader::ClearClips()
 {
-   if(mClips.GetCount())
-      mClips.Clear();
+   mClips.clear();
 }

@@ -11,6 +11,7 @@
 #ifndef __AUDACITY_DEVICE_TOOLBAR__
 #define __AUDACITY_DEVICE_TOOLBAR__
 
+#include "../MemoryX.h"
 #include <vector>
 #include "ToolBar.h"
 
@@ -21,7 +22,7 @@ class wxChoice;
 class wxStaticText;
 struct DeviceSourceMap;
 
-class DeviceToolBar:public ToolBar {
+class DeviceToolBar final : public ToolBar {
 
  public:
 
@@ -30,14 +31,13 @@ class DeviceToolBar:public ToolBar {
 
    void Create(wxWindow * parent);
 
-   void RecreateTipWindows();
    void UpdatePrefs();
 
    void DeinitChildren();
-   virtual void Populate();
-   virtual void Repaint(wxDC * WXUNUSED(dc)) {};
-   virtual void EnableDisableButtons();
-   virtual bool Layout();
+   void Populate() override;
+   void Repaint(wxDC * WXUNUSED(dc)) override {};
+   void EnableDisableButtons() override;
+   bool Layout() override;
    void OnFocus(wxFocusEvent &event);
    void OnCaptureKey(wxCommandEvent &event);
 
@@ -46,7 +46,7 @@ class DeviceToolBar:public ToolBar {
    /// When the prefs don't exist this value is used.
    /// It should be small enough to work on tiny screens
    int GetInitialWidth() { return 620; }
-   virtual int GetMinToolbarWidth() { return 200; }
+   int GetMinToolbarWidth() override { return 200; }
 
    void ShowInputDialog();
    void ShowOutputDialog();
@@ -63,12 +63,12 @@ class DeviceToolBar:public ToolBar {
    void FillInputChannels();
    void SetDevices(const DeviceSourceMap *in, const DeviceSourceMap *out);
    void RepositionCombos();
-   void RegenerateTooltips();
+   void SetNames();
+   void RegenerateTooltips() override;
 
    void ShowComboDialog(wxChoice *combo, const wxString &title);
 
-   wxBitmap *mPlayBitmap;
-   wxBitmap *mRecordBitmap;
+   std::unique_ptr<wxBitmap> mPlayBitmap, mRecordBitmap;
 
    wxChoice *mInput;
    wxChoice *mOutput;

@@ -10,7 +10,7 @@
   the entire track hierarchy.  The UndoManager makes a duplicate
   of every single track using its Duplicate method, which should
   increment reference counts.  If we were not at the top of
-  the stack when this is called, delete above first.
+  the stack when this is called, DELETE above first.
 
   If a minor change is made, for example changing the visual
   display of a track or changing the selection, you can call
@@ -48,42 +48,59 @@
 #ifndef __AUDACITY_UNDOMANAGER__
 #define __AUDACITY_UNDOMANAGER__
 
-#include <wx/dynarray.h>
+#include "MemoryX.h"
+#include <vector>
 #include <wx/string.h>
 #include "ondemand/ODTaskThread.h"
 #include "SelectedRegion.h"
 
+class Tags;
 class Track;
 class TrackList;
 
-struct UndoStackElem {
-   TrackList *tracks;
-   wxString description;
-   wxString shortDescription;
-   SelectedRegion selectedRegion;
+struct UndoStackElem;
+struct UndoState {
+   UndoState(std::unique_ptr<TrackList> &&tracks_,
+      const std::shared_ptr<Tags> &tags_,
+      const SelectedRegion &selectedRegion_)
+      : tracks(std::move(tracks_)), tags(tags_), selectedRegion(selectedRegion_)
+   {}
+
+   std::unique_ptr<TrackList> tracks;
+   std::shared_ptr<Tags> tags;
+   SelectedRegion selectedRegion; // by value
 };
 
-WX_DEFINE_USER_EXPORTED_ARRAY(UndoStackElem *, UndoStack, class AUDACITY_DLL_API);
-WX_DEFINE_USER_EXPORTED_ARRAY_SIZE_T(size_t, SpaceArray, class AUDACITY_DLL_API);
+using UndoStack = std::vector <movable_ptr<UndoStackElem>>;
+
+using SpaceArray = std::vector <wxLongLong_t> ;
 
 // These flags control what extra to do on a PushState
-// Default is PUSH_AUTOSAVE
-// Frequent/faster actions use PUSH_CONSOLIDATE
-const int PUSH_MINIMAL = 0;
-const int PUSH_CONSOLIDATE = 1;
-const int PUSH_AUTOSAVE = 2;
+// Default is AUTOSAVE
+// Frequent/faster actions use CONSOLIDATE
+enum class UndoPush : unsigned char {
+   MINIMAL = 0,
+   CONSOLIDATE = 1 << 0,
+   AUTOSAVE = 1 << 1
+};
+
+inline UndoPush operator | (UndoPush a, UndoPush b)
+{ return static_cast<UndoPush>(static_cast<int>(a) | static_cast<int>(b)); }
+inline UndoPush operator & (UndoPush a, UndoPush b)
+{ return static_cast<UndoPush>(static_cast<int>(a) & static_cast<int>(b)); }
 
 class AUDACITY_DLL_API UndoManager {
  public:
    UndoManager();
    ~UndoManager();
 
-   void PushState(TrackList * l,
+   void PushState(const TrackList * l,
                   const SelectedRegion &selectedRegion,
-                  wxString longDescription, wxString shortDescription,
-                  int flags = PUSH_AUTOSAVE);
-   void ModifyState(TrackList * l,
-                    const SelectedRegion &selectedRegion);
+                  const std::shared_ptr<Tags> &tags,
+                  const wxString &longDescription, const wxString &shortDescription,
+                  UndoPush flags = UndoPush::AUTOSAVE);
+   void ModifyState(const TrackList * l,
+                    const SelectedRegion &selectedRegion, const std::shared_ptr<Tags> &tags);
    void ClearStates();
    void RemoveStates(int num);  // removes the 'num' oldest states
    void RemoveStateAt(int n);   // removes the n'th state (1 is oldest)
@@ -91,12 +108,12 @@ class AUDACITY_DLL_API UndoManager {
    unsigned int GetCurrentState();
 
    void GetShortDescription(unsigned int n, wxString *desc);
-   void GetLongDescription(unsigned int n, wxString *desc, wxString *size);
-   void SetLongDescription(unsigned int n, wxString desc);
+   wxLongLong_t GetLongDescription(unsigned int n, wxString *desc, wxString *size);
+   void SetLongDescription(unsigned int n, const wxString &desc);
 
-   TrackList *SetStateTo(unsigned int n, SelectedRegion *selectedRegion);
-   TrackList *Undo(SelectedRegion *selectedRegion);
-   TrackList *Redo(SelectedRegion *selectedRegion);
+   const UndoState &SetStateTo(unsigned int n, SelectedRegion *selectedRegion);
+   const UndoState &Undo(SelectedRegion *selectedRegion);
+   const UndoState &Redo(SelectedRegion *selectedRegion);
 
    bool UndoAvailable();
    bool RedoAvailable();

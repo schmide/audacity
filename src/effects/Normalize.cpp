@@ -16,6 +16,7 @@
 
 
 #include "../Audacity.h" // for rint from configwin.h
+#include "Normalize.h"
 
 #include <math.h>
 
@@ -28,12 +29,10 @@
 #include "../WaveTrack.h"
 #include "../widgets/valnum.h"
 
-#include "Normalize.h"
-
 // Define keys, defaults, minimums, and maximums for the effect parameters
 //
 //     Name       Type     Key                        Def      Min      Max   Scale
-Param( Level,     double,  XO("Level"),               0.0,     -145.0,  0.0,  1  );
+Param( Level,     double,  XO("Level"),               -1.0,    -145.0,  0.0,  1  );
 Param( RemoveDC,  bool,    XO("RemoveDcOffset"),      true,    false,   true, 1  );
 Param( ApplyGain, bool,    XO("ApplyGain"),           true,    false,   true, 1  );
 Param( StereoInd, bool,    XO("StereoIndependent"),   false,   false,   true, 1  );
@@ -49,6 +48,8 @@ EffectNormalize::EffectNormalize()
    mDC = DEF_RemoveDC;
    mGain = DEF_ApplyGain;
    mStereoInd = DEF_StereoInd;
+
+   SetLinearEffectFlag(false);
 }
 
 EffectNormalize::~EffectNormalize()
@@ -64,7 +65,7 @@ wxString EffectNormalize::GetSymbol()
 
 wxString EffectNormalize::GetDescription()
 {
-   return XO("Sets the peak amplitude of a one or more tracks");
+   return XO("Sets the peak amplitude of one or more tracks");
 }
 
 // EffectIdentInterface implementation
@@ -150,16 +151,15 @@ bool EffectNormalize::Process()
 
    float ratio;
    if( mGain )
-      ratio = pow(10.0,TrapDouble(mLevel, // same value used for all tracks
-                               MIN_Level,
-                               MAX_Level)/20.0);
+      // same value used for all tracks
+      ratio = DB_TO_LINEAR(TrapDouble(mLevel, MIN_Level, MAX_Level));
    else
       ratio = 1.0;
 
    //Iterate over each track
    this->CopyInputTracks(); // Set up mOutputTracks.
    bool bGoodResult = true;
-   SelectedTrackListOfKindIterator iter(Track::Wave, mOutputTracks);
+   SelectedTrackListOfKindIterator iter(Track::Wave, mOutputTracks.get());
    WaveTrack *track = (WaveTrack *) iter.First();
    WaveTrack *prevTrack;
    prevTrack = track;
@@ -283,7 +283,7 @@ void EffectNormalize::PopulateOrExchange(ShuttleGui & S)
                                              mGain ? wxT("true") : wxT("false"));
                mGainCheckBox->SetValidator(wxGenericValidator(&mGain));
 
-               FloatingPointValidator<double> vldLevel(1, &mLevel);
+               FloatingPointValidator<double> vldLevel(2, &mLevel, NUM_VAL_ONE_TRAILING_ZERO);
                vldLevel.SetRange(MIN_Level, MAX_Level);
                mLevelTextCtrl = S.AddTextBox(wxT(""), wxT(""), 10);
                mLevelTextCtrl->SetName(_("Maximum amplitude dB"));
@@ -333,7 +333,7 @@ bool EffectNormalize::TransferDataFromWindow()
 
 // EffectNormalize implementation
 
-void EffectNormalize::AnalyseTrack(WaveTrack * track, wxString msg)
+void EffectNormalize::AnalyseTrack(WaveTrack * track, const wxString &msg)
 {
    if(mGain) {
       // Since we need complete summary data, we need to block until the OD tasks are done for this track
@@ -361,10 +361,9 @@ void EffectNormalize::AnalyseTrack(WaveTrack * track, wxString msg)
 //AnalyseDC() takes a track, transforms it to bunch of buffer-blocks,
 //and executes AnalyzeData on it...
 // sets mOffset
-bool EffectNormalize::AnalyseDC(WaveTrack * track, wxString msg)
+bool EffectNormalize::AnalyseDC(WaveTrack * track, const wxString &msg)
 {
    bool rc = true;
-   sampleCount s;
 
    mOffset = 0.0; // we might just return
 
@@ -372,8 +371,8 @@ bool EffectNormalize::AnalyseDC(WaveTrack * track, wxString msg)
       return(rc);
 
    //Transform the marker timepoints to samples
-   sampleCount start = track->TimeToLongSamples(mCurT0);
-   sampleCount end = track->TimeToLongSamples(mCurT1);
+   auto start = track->TimeToLongSamples(mCurT0);
+   auto end = track->TimeToLongSamples(mCurT1);
 
    //Get the length of the buffer (as double). len is
    //used simply to calculate a progress meter, so it is easier
@@ -389,14 +388,14 @@ bool EffectNormalize::AnalyseDC(WaveTrack * track, wxString msg)
 
    //Go through the track one buffer at a time. s counts which
    //sample the current buffer starts at.
-   s = start;
+   auto s = start;
    while (s < end) {
       //Get a block of samples (smaller than the size of the buffer)
-      sampleCount block = track->GetBestBlockSize(s);
-
       //Adjust the block size if it is the final block in the track
-      if (s + block > end)
-         block = end - s;
+      const auto block = limitSampleBufferSize(
+         track->GetBestBlockSize(s),
+         end - s
+      );
 
       //Get the samples from the track and put them in the buffer
       track->Get((samplePtr) buffer, floatSample, s, block);
@@ -427,14 +426,13 @@ bool EffectNormalize::AnalyseDC(WaveTrack * track, wxString msg)
 //ProcessOne() takes a track, transforms it to bunch of buffer-blocks,
 //and executes ProcessData, on it...
 // uses mMult and mOffset to normalize a track.  Needs to have them set before being called
-bool EffectNormalize::ProcessOne(WaveTrack * track, wxString msg)
+bool EffectNormalize::ProcessOne(WaveTrack * track, const wxString &msg)
 {
    bool rc = true;
-   sampleCount s;
 
    //Transform the marker timepoints to samples
-   sampleCount start = track->TimeToLongSamples(mCurT0);
-   sampleCount end = track->TimeToLongSamples(mCurT1);
+   auto start = track->TimeToLongSamples(mCurT0);
+   auto end = track->TimeToLongSamples(mCurT1);
 
    //Get the length of the buffer (as double). len is
    //used simply to calculate a progress meter, so it is easier
@@ -447,14 +445,14 @@ bool EffectNormalize::ProcessOne(WaveTrack * track, wxString msg)
 
    //Go through the track one buffer at a time. s counts which
    //sample the current buffer starts at.
-   s = start;
+   auto s = start;
    while (s < end) {
       //Get a block of samples (smaller than the size of the buffer)
-      sampleCount block = track->GetBestBlockSize(s);
-
       //Adjust the block size if it is the final block in the track
-      if (s + block > end)
-         block = end - s;
+      const auto block = limitSampleBufferSize(
+         track->GetBestBlockSize(s),
+         end - s
+      );
 
       //Get the samples from the track and put them in the buffer
       track->Get((samplePtr) buffer, floatSample, s, block);
@@ -484,18 +482,14 @@ bool EffectNormalize::ProcessOne(WaveTrack * track, wxString msg)
 
 void EffectNormalize::AnalyzeData(float *buffer, sampleCount len)
 {
-   sampleCount i;
-
-   for(i=0; i<len; i++)
+   for(decltype(len) i = 0; i < len; i++)
       mSum += (double)buffer[i];
    mCount += len;
 }
 
 void EffectNormalize::ProcessData(float *buffer, sampleCount len)
 {
-   sampleCount i;
-
-   for(i=0; i<len; i++) {
+   for(decltype(len) i = 0; i < len; i++) {
       float adjFrame = (buffer[i] + mOffset) * mMult;
       buffer[i] = adjFrame;
    }

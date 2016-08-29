@@ -20,7 +20,7 @@ AutoRollbackRenamer.
 
 \class AutoRollbackRenamer
 \brief AutoRollbackRenamer handles the renaming of files
-which is needed when producing a new version of a file which may fail.
+which is needed when producing a NEW version of a file which may fail.
 On failure the old version is put back in place.
 
 *//*******************************************************************/
@@ -206,7 +206,10 @@ static bool ConvertLegacyTrack(wxTextFile *f, XMLFileWriter &xmlFile)
             xmlFile.WriteAttr(wxT("name"), localName);
             xmlFile.WriteAttr(wxT("alias"), 1);
             xmlFile.WriteAttr(wxT("aliaspath"), aliasPath);
+
+            // This was written but not read again?
             xmlFile.WriteAttr(wxT("aliasstart"), aliasStart);
+
             xmlFile.WriteAttr(wxT("aliaslen"), aliasLen);
             xmlFile.WriteAttr(wxT("aliaschannel"), aliasChannel);
             xmlFile.WriteAttr(wxT("summarylen"), localLen);
@@ -284,7 +287,7 @@ static bool ConvertLegacyTrack(wxTextFile *f, XMLFileWriter &xmlFile)
       return false;
 }
 
-bool ConvertLegacyProjectFile(wxFileName filename)
+bool ConvertLegacyProjectFile(const wxFileName &filename)
 {
    wxTextFile f;
    XMLFileWriter xmlFile;
@@ -314,9 +317,8 @@ bool ConvertLegacyProjectFile(wxFileName filename)
    {
       xmlFile.Open(name, wxT("wb"));
    }
-   catch (XMLFileWriterException* pException)
+   catch (const XMLFileWriterException&)
    {
-      delete pException;
       return false;
    }
 
@@ -360,10 +362,9 @@ bool ConvertLegacyProjectFile(wxFileName filename)
       xmlFile.EndTag(wxT("audacityproject"));
       xmlFile.Close();
    }
-   catch (XMLFileWriterException* pException)
+   catch (const XMLFileWriterException&)
    {
       // Error writing XML file (e.g. disk full)
-      delete pException;
       return false;
    }
 

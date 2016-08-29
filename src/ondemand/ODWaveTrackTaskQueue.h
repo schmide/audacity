@@ -22,13 +22,14 @@ tasks associated with a WaveTrack.
 #ifndef __AUDACITY_ODWAVETRACKTASKQUEUE__
 #define __AUDACITY_ODWAVETRACKTASKQUEUE__
 
+#include "../MemoryX.h"
 #include <vector>
 #include "ODTaskThread.h"
 #include <wx/wx.h>
 class WaveTrack;
 class ODTask;
 /// A class representing a modular task to be used with the On-Demand structures.
-class ODWaveTrackTaskQueue
+class ODWaveTrackTaskQueue final
 {
  public:
 
@@ -57,7 +58,7 @@ class ODWaveTrackTaskQueue
    void MakeWaveTrackIndependent(WaveTrack* track);
 
    ///returns whether or not this queue's task list and another's can merge together, as when we make two mono tracks stereo.
-   virtual bool CanMergeWith(ODWaveTrackTaskQueue* otherQueue);
+   bool CanMergeWith(ODWaveTrackTaskQueue* otherQueue);
    void MergeWaveTrack(WaveTrack* track);
 
 
@@ -71,7 +72,7 @@ class ODWaveTrackTaskQueue
    int GetNumWaveTracks();
 
    ///Add a task to the queue.
-   void AddTask(ODTask* task);
+   void AddTask(movable_ptr<ODTask> &&mtask);
 
    //returns true if either tracks or tasks are empty
    bool IsEmpty();
@@ -92,7 +93,7 @@ class ODWaveTrackTaskQueue
    ODTask* GetTask(size_t x);
 
    ///fills in the status bar message for a given track
-   void FillTipForWaveTrack( WaveTrack * t, const wxChar ** ppTip );
+   void FillTipForWaveTrack( WaveTrack * t, wxString &tip );
 
  protected:
 
@@ -105,7 +106,7 @@ class ODWaveTrackTaskQueue
   ODLock mTracksMutex;
 
   ///the list of tasks associated with the tracks.  This class owns these tasks.
-  std::vector<ODTask*> mTasks;
+  std::vector<movable_ptr<ODTask>> mTasks;
   ODLock    mTasksMutex;
 
 };

@@ -15,21 +15,20 @@
 #include <wx/checkbox.h>
 #include <wx/event.h>
 #include <wx/gdicmn.h>
-#include <wx/panel.h>
 #include <wx/slider.h>
 #include <wx/string.h>
 #include <wx/stattext.h>
 #include <wx/window.h>
-
-#include "../ShuttleGui.h"
+#include "../widgets/wxPanelWrapper.h"
 
 #include "TwoPassSimpleMono.h"
 
 class EffectCompressorPanel;
+class ShuttleGui;
 
 #define COMPRESSOR_PLUGIN_SYMBOL XO("Compressor")
 
-class EffectCompressor : public EffectTwoPassSimpleMono
+class EffectCompressor final : public EffectTwoPassSimpleMono
 {
 public:
 
@@ -38,33 +37,33 @@ public:
 
    // IdentInterface implementation
 
-   virtual wxString GetSymbol();
-   virtual wxString GetDescription();
+   wxString GetSymbol() override;
+   wxString GetDescription() override;
 
    // EffectIdentInterface implementation
 
-   virtual EffectType GetType();
+   EffectType GetType() override;
 
    // EffectClientInterface implementation
 
-   virtual bool GetAutomationParameters(EffectAutomationParameters & parms);
-   virtual bool SetAutomationParameters(EffectAutomationParameters & parms);
+   bool GetAutomationParameters(EffectAutomationParameters & parms) override;
+   bool SetAutomationParameters(EffectAutomationParameters & parms) override;
 
    // Effect implementation
 
-   virtual bool Startup();
-   virtual void PopulateOrExchange(ShuttleGui & S);
-   virtual bool TransferDataToWindow();
-   virtual bool TransferDataFromWindow();
+   bool Startup() override;
+   void PopulateOrExchange(ShuttleGui & S) override;
+   bool TransferDataToWindow() override;
+   bool TransferDataFromWindow() override;
 
 protected:
    // EffectTwoPassSimpleMono implementation
 
-   virtual bool InitPass1();
-   virtual bool InitPass2();
-   virtual bool NewTrackPass1();
-   virtual bool ProcessPass2(float *buffer, sampleCount len);
-   virtual bool TwoBufferProcessPass1(float *buffer1, sampleCount len1, float *buffer2, sampleCount len2);
+   bool InitPass1() override;
+   bool InitPass2() override;
+   bool NewTrackPass1() override;
+   bool ProcessPass2(float *buffer, sampleCount len) override;
+   bool TwoBufferProcessPass1(float *buffer1, sampleCount len1, float *buffer2, sampleCount len2) override;
 
 private:
    // EffectCompressor implementation
@@ -134,7 +133,7 @@ private:
    DECLARE_EVENT_TABLE();
 };
 
-class EffectCompressorPanel: public wxPanel
+class EffectCompressorPanel final : public wxPanelWrapper
 {
 public:
    EffectCompressorPanel(wxWindow *parent,
@@ -150,11 +149,6 @@ private:
    double & threshold;
    double & noiseFloor;
    double & ratio;
-
-   wxBitmap *mBitmap;
-   wxRect mEnvRect;
-   int mWidth;
-   int mHeight;
 
    DECLARE_EVENT_TABLE();
 };

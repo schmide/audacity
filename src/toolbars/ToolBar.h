@@ -15,11 +15,12 @@
 
 #include "../Experimental.h"
 
+#include <vector>
 #include <wx/defs.h>
-#include <wx/panel.h>
 #include <wx/sizer.h>
 
 #include "../Theme.h"
+#include "../widgets/wxPanelWrapper.h"
 
 class wxDC;
 class wxEraseEvent;
@@ -71,6 +72,7 @@ enum
    MixerBarID,
    EditBarID,
    TranscriptionBarID,
+   ScrubbingBarID,
    DeviceBarID,
    SelectionBarID,
 #ifdef EXPERIMENTAL_SPECTRAL_EDITING
@@ -79,18 +81,27 @@ enum
    ToolBarCount
 };
 
-class ToolBar:public wxPanel
+// How may pixels padding each side of a floating toolbar
+enum { ToolBarFloatMargin = 1 };
+
+class ToolBar /* not final */ : public wxPanelWrapper
 {
 
  public:
 
+   using Holder = Destroy_ptr<ToolBar>;
+
    ToolBar(int type, const wxString & label, const wxString & section, bool resizable = false);
    virtual ~ToolBar();
 
+   bool AcceptsFocus() const override { return false; };
+
+   //NEW virtuals:
    virtual void Create(wxWindow *parent);
    virtual void EnableDisableButtons() = 0;
    virtual void ReCreateButtons();
    virtual void UpdatePrefs();
+   virtual void RegenerateTooltips() = 0;
 
    int GetType();
    wxString GetTitle();
@@ -103,22 +114,26 @@ class ToolBar:public wxPanel
 
    void SetDocked(ToolDock *dock, bool pushed);
 
+   // NEW virtual:
    virtual bool Expose(bool show = true);
 
-   bool IsResizable();
-   bool IsVisible();
-   bool IsDocked();
+   bool IsResizable() const;
+   bool IsVisible() const;
+   bool IsDocked() const;
    bool IsPositioned(){ return mPositioned; };
    void SetVisible( bool bVisible );
    void SetPositioned(){ mPositioned = true;};
 
    /// Resizable toolbars should implement this.
-   virtual int GetInitialWidth() {return -1;}
-   virtual int GetMinToolbarWidth() {return GetInitialWidth();}
-   virtual wxSize GetDockedSize(){ return GetMinSize();}
- protected:
+   // NEW virtuals:
+   virtual int GetInitialWidth() { return -1; }
+   virtual int GetMinToolbarWidth() { return GetInitialWidth(); }
+   virtual wxSize GetDockedSize() { return GetMinSize(); }
 
-   AButton *MakeButton(teBmps eUp,
+ public:
+   static
+   AButton *MakeButton(wxWindow *parent,
+                       teBmps eUp,
                        teBmps eDown,
                        teBmps eHilite,
                        teBmps eStandardUp,
@@ -138,7 +153,19 @@ class ToolBar:public wxPanel
                             teBmps eStandardDown,
                             teBmps eDisabled,
                             wxSize size);
-   
+
+   static
+   void SetButtonToolTip
+      (AButton &button,
+       // An array, alternating user-visible strings, and
+       // non-user-visible command names.  If a shortcut key is defined
+       // for the command, then it is appended, parenthesized, after the
+       // user-visible string.
+       const std::vector<wxString> &commands,
+       // If more than one pair of strings is given, then use this separator.
+       const wxString &separator = wxT(" / "));
+
+ protected:
    void SetButton(bool down, AButton *button);
 
    void MakeMacRecoloredImage(teBmps eBmpOut, teBmps eBmpIn);
@@ -154,6 +181,7 @@ class ToolBar:public wxPanel
             int border = 0,
             wxObject *userData = NULL);
 
+   // Takes ownership of sizer
    void Add(wxSizer *sizer,
              int proportion = 0,
              int flag = 0,
@@ -183,6 +211,7 @@ class ToolBar:public wxPanel
 
    void OnErase(wxEraseEvent & event);
    void OnPaint(wxPaintEvent & event);
+   void OnMouseEvents(wxMouseEvent &event);
 
  protected:
    wxString mLabel;
@@ -198,8 +227,6 @@ class ToolBar:public wxPanel
 
    wxBoxSizer *mHSizer;
    wxSizerItem *mSpacer;
-
-   ToolDock *mDock;
 
    bool mVisible;
    bool mResizable;

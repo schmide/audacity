@@ -11,7 +11,6 @@
 #ifndef __AUDACITY_SPECTRUM__
 #define __AUDACITY_SPECTRUM__
 
-#include "WaveTrack.h"
 #include "FFT.h"
 
 /*
@@ -22,7 +21,7 @@
   calculates windowSize/2 frequency samples
 */
 
-bool ComputeSpectrum(float * data, int width, int windowSize,
+bool ComputeSpectrum(const float * data, int width, int windowSize,
                      double rate, float *out, bool autocorrelation,
                      int windowFunc = eWinFuncHanning);
 

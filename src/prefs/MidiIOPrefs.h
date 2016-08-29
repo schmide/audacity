@@ -10,6 +10,9 @@
 **********************************************************************/
 
 #include "../Experimental.h"
+
+class ShuttleGui;
+
 #ifdef EXPERIMENTAL_MIDI_OUT
 
 #ifndef __AUDACITY_MIDI_IO_PREFS__
@@ -21,17 +24,15 @@
 #include <wx/string.h>
 #include <wx/window.h>
 
-#include "../ShuttleGui.h"
-
 #include "PrefsPanel.h"
 
-class MidiIOPrefs:public PrefsPanel
+class MidiIOPrefs final : public PrefsPanel
 {
  public:
    MidiIOPrefs(wxWindow * parent);
    virtual ~MidiIOPrefs();
-   virtual bool Apply();
-   virtual bool Validate();
+   bool Apply() override;
+   bool Validate() override;
 
  private:
    void Populate();
@@ -61,6 +62,11 @@ class MidiIOPrefs:public PrefsPanel
    DECLARE_EVENT_TABLE();
 };
 
+class MidiIOPrefsFactory final : public PrefsPanelFactory
+{
+public:
+   PrefsPanel *Create(wxWindow *parent) override;
+};
 #endif
 
 #endif

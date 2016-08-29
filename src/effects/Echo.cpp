@@ -20,14 +20,14 @@
 *//*******************************************************************/
 
 #include "../Audacity.h"
+#include "Echo.h"
 
 #include <float.h>
 
 #include <wx/intl.h>
 
+#include "../ShuttleGui.h"
 #include "../widgets/valnum.h"
-
-#include "Echo.h"
 
 // Define keys, defaults, minimums, and maximums for the effect parameters
 //
@@ -39,6 +39,8 @@ EffectEcho::EffectEcho()
 {
    delay = DEF_Delay;
    decay = DEF_Decay;
+
+   SetLinearEffectFlag(true);
 }
 
 EffectEcho::~EffectEcho()
@@ -85,7 +87,16 @@ bool EffectEcho::ProcessInitialize(sampleCount WXUNUSED(totalLen), ChannelNames 
 
    histPos = 0;
    histLen = (sampleCount) (mSampleRate * delay);
-   history = new float[histLen];
+
+   // Guard against extreme delay values input by the user
+   try {
+      history = new float[histLen];
+   }
+   catch ( const std::bad_alloc& ) {
+      wxMessageBox(_("Requested value exceeds memory capacity."));
+      return false;
+   }
+
    memset(history, 0, sizeof(float) * histLen);
    
    return history != NULL;
@@ -103,7 +114,7 @@ sampleCount EffectEcho::ProcessBlock(float **inBlock, float **outBlock, sampleCo
    float *ibuf = inBlock[0];
    float *obuf = outBlock[0];
 
-   for (sampleCount i = 0; i < blockLen; i++, histPos++)
+   for (decltype(blockLen) i = 0; i < blockLen; i++, histPos++)
    {
       if (histPos == histLen)
       {

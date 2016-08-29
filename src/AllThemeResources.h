@@ -19,7 +19,7 @@ and grids used by Audacity.
 This will be split up into separate include files to reduce the amount
 of recompilation on a change.
 
-Meantime, do NOT delete any of these declarations, even if they're
+Meantime, do NOT DELETE any of these declarations, even if they're
 unused, as they're all offset by prior declarations.
 
 To add an image, you give its size and name like so:
@@ -44,6 +44,7 @@ from there.  Audacity will look for a file called "Pause.png".
 // Note: No '#ifndef/#define' pair on this header file.
 // we want to include it multiple times in Theme.cpp.
 
+#include "Experimental.h"
 #include "MacroMagic.h"
 #define XPMS_RETIRED
 
@@ -66,6 +67,10 @@ from there.  Audacity will look for a file called "Pause.png".
    DEFINE_IMAGE( bmpCutPreviewDisabled, wxImage( 16, 16 ), wxT("CutPreviewDisabled"));
    DEFINE_IMAGE( bmpAppendRecord, wxImage( 16, 16 ), wxT("AppendRecord"));
    DEFINE_IMAGE( bmpAppendRecordDisabled, wxImage( 16, 16 ), wxT("AppendRecordDisabled"));
+   DEFINE_IMAGE( bmpScrubDisabled, wxImage( 18, 16 ), wxT("ScrubDisabled"));
+   DEFINE_IMAGE( bmpScrub, wxImage( 18, 16 ), wxT("Scrub"));
+   DEFINE_IMAGE( bmpSeekDisabled, wxImage( 26, 16 ), wxT("SeekDisabled"));
+   DEFINE_IMAGE( bmpSeek, wxImage( 26, 16 ), wxT("Seek"));
 
    SET_THEME_FLAGS(  resFlagNewLine  );
    DEFINE_IMAGE( bmpUpButtonLarge, wxImage( 48, 48 ), wxT("UpButtonLarge"));
@@ -77,6 +82,7 @@ from there.  Audacity will look for a file called "Pause.png".
    DEFINE_IMAGE( bmpVolumeSlider, wxImage( 100, 28 ), wxT("VolumeSlider"));
    DEFINE_IMAGE( bmpVolumeSliderThumb, wxImage( 10, 28 ), wxT("VolumeSliderThumb"));
    DEFINE_IMAGE( bmpSliderThumb, wxImage( 11, 14 ), wxT("SliderThumb"));
+   DEFINE_IMAGE( bmpToggleScrubRuler, wxImage( 20, 20 ), wxT("ToggleScrubBar"));
 
    SET_THEME_FLAGS(  resFlagNone  );
    DEFINE_IMAGE( bmpMacUpButton, wxImage( 36, 36 ), wxT("MacUpButton"));
@@ -119,6 +125,11 @@ from there.  Audacity will look for a file called "Pause.png".
    DEFINE_IMAGE( bmpMulti, wxImage( 27, 27 ), wxT("Multi"));
    DEFINE_IMAGE( bmpMic, wxImage( 25, 25 ), wxT("Mic"));
    DEFINE_IMAGE( bmpSpeaker, wxImage( 25, 25 ), wxT("Speaker"));
+
+   DEFINE_IMAGE( bmpPinnedPlayHead, wxImage( 27, 27 ), wxT("PinnedPlayHead"));
+   DEFINE_IMAGE( bmpUnpinnedPlayHead, wxImage( 27, 27 ), wxT("UnpinnedPlayHead"));
+   DEFINE_IMAGE( bmpPinnedRecordHead, wxImage( 27, 27 ), wxT("PinnedRecordHead"));
+   DEFINE_IMAGE( bmpUnpinnedRecordHead, wxImage( 27, 27 ), wxT("UnpinnedRecordHead"));
 
    SET_THEME_FLAGS(  resFlagPaired  );
    DEFINE_IMAGE( bmpZoomFit, wxImage( 27, 27 ), wxT("ZoomFit"));

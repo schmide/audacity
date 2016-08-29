@@ -4951,7 +4951,8 @@ else
     ;;
   *)
     lt_cv_sys_max_cmd_len=`(getconf ARG_MAX) 2> /dev/null`
-    if test -n "$lt_cv_sys_max_cmd_len"; then
+    if test -n "$lt_cv_sys_max_cmd_len" && \
+	test undefined != "$lt_cv_sys_max_cmd_len"; then
       lt_cv_sys_max_cmd_len=`expr $lt_cv_sys_max_cmd_len \/ 4`
       lt_cv_sys_max_cmd_len=`expr $lt_cv_sys_max_cmd_len \* 3`
     else
@@ -6508,7 +6509,7 @@ ia64-*-hpux*)
   rm -rf conftest*
   ;;
 
-x86_64-*kfreebsd*-gnu|x86_64-*linux*|ppc*-*linux*|powerpc*-*linux*| \
+x86_64-*kfreebsd*-gnu|x86_64-*linux*|powerpc*-*linux*| \
 s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
   # Find out which ABI we are using.
   echo 'int i;' > conftest.$ac_ext
@@ -6524,9 +6525,19 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
 	    LD="${LD-ld} -m elf_i386_fbsd"
 	    ;;
 	  x86_64-*linux*)
-	    LD="${LD-ld} -m elf_i386"
+	    case `/usr/bin/file conftest.o` in
+	      *x86-64*)
+		LD="${LD-ld} -m elf32_x86_64"
+		;;
+	      *)
+		LD="${LD-ld} -m elf_i386"
+		;;
+	    esac
 	    ;;
-	  ppc64-*linux*|powerpc64-*linux*)
+	  powerpc64le-*)
+	    LD="${LD-ld} -m elf32lppclinux"
+	    ;;
+	  powerpc64-*)
 	    LD="${LD-ld} -m elf32ppclinux"
 	    ;;
 	  s390x-*linux*)
@@ -6545,7 +6556,10 @@ s390*-*linux*|s390*-*tpf*|sparc*-*linux*)
 	  x86_64-*linux*)
 	    LD="${LD-ld} -m elf_x86_64"
 	    ;;
-	  ppc*-*linux*|powerpc*-*linux*)
+	  powerpcle-*)
+	    LD="${LD-ld} -m elf64lppc"
+	    ;;
+	  powerpc-*)
 	    LD="${LD-ld} -m elf64ppc"
 	    ;;
 	  s390*-*linux*|s390*-*tpf*)
@@ -15808,7 +15822,7 @@ case "${host_os}" in
         $as_echo "#define PA_USE_COREAUDIO 1" >>confdefs.h
 
 
-        CFLAGS="$CFLAGS -I\$(top_srcdir)/src/os/unix -Werror"
+        CFLAGS="$CFLAGS -I\$(top_srcdir)/src/os/unix -Wno-deprecated -Werror"
         LIBS="-framework CoreAudio -framework AudioToolbox -framework AudioUnit -framework Carbon"
 
         if test "x$enable_mac_universal" = "xyes" ; then
@@ -15834,8 +15848,23 @@ case "${host_os}" in
               elif xcodebuild -version -sdk macosx10.7 Path >/dev/null 2>&1 ; then
                  mac_version_min="-mmacosx-version-min=10.4"
                  mac_sysroot="-isysroot `xcodebuild -version -sdk macosx10.7 Path`"
+              elif xcodebuild -version -sdk macosx10.8 Path >/dev/null 2>&1 ; then
+                 mac_version_min="-mmacosx-version-min=10.4"
+                 mac_sysroot="-isysroot `xcodebuild -version -sdk macosx10.8 Path`"
+              elif xcodebuild -version -sdk macosx10.9 Path >/dev/null 2>&1 ; then
+                 mac_version_min="-mmacosx-version-min=10.4"
+                 mac_sysroot="-isysroot `xcodebuild -version -sdk macosx10.9 Path`"
+              elif xcodebuild -version -sdk macosx10.10 Path >/dev/null 2>&1 ; then
+                 mac_version_min="-mmacosx-version-min=10.4"
+                 mac_sysroot="-isysroot `xcodebuild -version -sdk macosx10.10 Path`"
+              elif xcodebuild -version -sdk macosx10.11 Path >/dev/null 2>&1 ; then
+                 mac_version_min="-mmacosx-version-min=10.4"
+                 mac_sysroot="-isysroot `xcodebuild -version -sdk macosx10.11 Path`"
+              elif xcodebuild -version -sdk macosx10.12 Path >/dev/null 2>&1 ; then
+                 mac_version_min="-mmacosx-version-min=10.4"
+                 mac_sysroot="-isysroot `xcodebuild -version -sdk macosx10.12 Path`"
               else
-                 as_fn_error $? "Couldn't find 10.5, 10.6, or 10.7 SDK" "$LINENO" 5
+                 as_fn_error $? "Could not find 10.5 to 10.12 SDK." "$LINENO" 5
               fi
            esac
 
@@ -15909,7 +15938,7 @@ rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
 
         if [ "x$with_wdmks" = "xyes" ]; then
             DXDIR="$with_dxdir"
-            add_objects src/hostapi/wdmks/pa_win_wdmks.o src/common/pa_ringbuffer.o src/os/win/pa_win_hostapis.o src/os/win/pa_win_util.o src/os/win/pa_win_wdmks_util.o src/os/win/pa_win_waveformat.o
+            add_objects src/hostapi/wdmks/pa_win_wdmks.o src/common/pa_ringbuffer.o src/os/win/pa_win_hostapis.o src/os/win/pa_win_util.o src/os/win/pa_win_wdmks_utils.o src/os/win/pa_win_waveformat.o
             LIBS="${LIBS} -lwinmm -lm -luuid -lsetupapi -lole32"
             DLL_LIBS="${DLL_LIBS} -lwinmm -lm -L$DXDIR/lib -luuid -lsetupapi -lole32"
             #VC98="\"/c/Program Files/Microsoft Visual Studio/VC98/Include\""

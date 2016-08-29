@@ -39,12 +39,15 @@
     * 9: Gaussian(a=4.5)
 */
 
+#include "FFT.h"
+
 #include <wx/intl.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
 
-#include "FFT.h"
+#include "RealFFTf.h"
+#include "Experimental.h"
 
 static int **gFFTBitTable = NULL;
 static const int MaxFastBits = 16;
@@ -108,10 +111,6 @@ void InitFFT()
    }
 }
 
-#ifdef EXPERIMENTAL_USE_REALFFTF
-#include "RealFFTf.h"
-#endif
-
 void DeinitFFT()
 {
    if (gFFTBitTable) {
@@ -120,10 +119,8 @@ void DeinitFFT()
       }
       delete[] gFFTBitTable;
    }
-#ifdef EXPERIMENTAL_USE_REALFFTF
    // Deallocate any unused RealFFTf tables
    CleanupFFT();
-#endif
 }
 
 inline int FastReverseBits(int i, int NumBits)
@@ -140,7 +137,8 @@ inline int FastReverseBits(int i, int NumBits)
 
 void FFT(int NumSamples,
          bool InverseTransform,
-         float *RealIn, float *ImagIn, float *RealOut, float *ImagOut)
+         const float *RealIn, const float *ImagIn,
+	 float *RealOut, float *ImagOut)
 {
    int NumBits;                 /* Number of bits needed to store indices */
    int i, j, k, n;
@@ -236,22 +234,11 @@ void FFT(int NumSamples,
 /*
  * Real Fast Fourier Transform
  *
- * This function was based on the code in Numerical Recipes in C.
- * In Num. Rec., the inner loop is based on a single 1-based array
- * of interleaved real and imaginary numbers.  Because we have two
- * separate zero-based arrays, our indices are quite different.
- * Here is the correspondence between Num. Rec. indices and our indices:
- *
- * i1  <->  real[i]
- * i2  <->  imag[i]
- * i3  <->  real[n/2-i]
- * i4  <->  imag[n/2-i]
+ * This is merely a wrapper of RealFFTf() from RealFFTf.h.
  */
 
-void RealFFT(int NumSamples, float *RealIn, float *RealOut, float *ImagOut)
+void RealFFT(int NumSamples, const float *RealIn, float *RealOut, float *ImagOut)
 {
-#ifdef EXPERIMENTAL_USE_REALFFTF
-   // Remap to RealFFTf() function
    int i;
    HFFT hFFT = GetFFT(NumSamples);
    float *pFFT = new float[NumSamples];
@@ -278,62 +265,8 @@ void RealFFT(int NumSamples, float *RealIn, float *RealOut, float *ImagOut)
    }
    delete [] pFFT;
    ReleaseFFT(hFFT);
-
-#else
-
-   int Half = NumSamples / 2;
-   int i;
-
-   float theta = M_PI / Half;
-
-   float *tmpReal = new float[Half];
-   float *tmpImag = new float[Half];
-
-   for (i = 0; i < Half; i++) {
-      tmpReal[i] = RealIn[2 * i];
-      tmpImag[i] = RealIn[2 * i + 1];
-   }
-
-   FFT(Half, 0, tmpReal, tmpImag, RealOut, ImagOut);
-
-   float wtemp = float (sin(0.5 * theta));
-
-   float wpr = -2.0 * wtemp * wtemp;
-   float wpi = -1.0 * float (sin(theta));
-   float wr = 1.0 + wpr;
-   float wi = wpi;
-
-   int i3;
-
-   float h1r, h1i, h2r, h2i;
-
-   for (i = 1; i < Half / 2; i++) {
-
-      i3 = Half - i;
-
-      h1r = 0.5 * (RealOut[i] + RealOut[i3]);
-      h1i = 0.5 * (ImagOut[i] - ImagOut[i3]);
-      h2r = 0.5 * (ImagOut[i] + ImagOut[i3]);
-      h2i = -0.5 * (RealOut[i] - RealOut[i3]);
-
-      RealOut[i] = h1r + wr * h2r - wi * h2i;
-      ImagOut[i] = h1i + wr * h2i + wi * h2r;
-      RealOut[i3] = h1r - wr * h2r + wi * h2i;
-      ImagOut[i3] = -h1i + wr * h2i + wi * h2r;
-
-      wr = (wtemp = wr) * wpr - wi * wpi + wr;
-      wi = wi * wpr + wtemp * wpi + wi;
-   }
-
-   RealOut[0] = (h1r = RealOut[0]) + ImagOut[0];
-   ImagOut[0] = h1r - ImagOut[0];
-
-   delete[]tmpReal;
-   delete[]tmpImag;
-#endif //EXPERIMENTAL_USE_REALFFTF
 }
 
-#ifdef EXPERIMENTAL_USE_REALFFTF
 /*
  * InverseRealFFT
  *
@@ -342,10 +275,12 @@ void RealFFT(int NumSamples, float *RealIn, float *RealOut, float *ImagOut)
  * and as a result the output is purely real.
  * Only the first half of RealIn and ImagIn are used due to this
  * symmetry assumption.
+ *
+ * This is merely a wrapper of InverseRealFFTf() from RealFFTf.h.
  */
-void InverseRealFFT(int NumSamples, float *RealIn, float *ImagIn, float *RealOut)
+void InverseRealFFT(int NumSamples, const float *RealIn, const float *ImagIn,
+		    float *RealOut)
 {
-   // Remap to RealFFTf() function
    int i;
    HFFT hFFT = GetFFT(NumSamples);
    float *pFFT = new float[NumSamples];
@@ -371,24 +306,20 @@ void InverseRealFFT(int NumSamples, float *RealIn, float *ImagIn, float *RealOut
    delete [] pFFT;
    ReleaseFFT(hFFT);
 }
-#endif // EXPERIMENTAL_USE_REALFFTF
 
 /*
  * PowerSpectrum
  *
- * This function computes the same as RealFFT, above, but
- * adds the squares of the real and imaginary part of each
- * coefficient, extracting the power and throwing away the
- * phase.
+ * This function uses RealFFTf() from RealFFTf.h to perform the real
+ * FFT computation, and then squares the real and imaginary part of
+ * each coefficient, extracting the power and throwing away the phase.
  *
  * For speed, it does not call RealFFT, but duplicates some
  * of its code.
  */
 
-void PowerSpectrum(int NumSamples, float *In, float *Out)
+void PowerSpectrum(int NumSamples, const float *In, float *Out)
 {
-#ifdef EXPERIMENTAL_USE_REALFFTF
-   // Remap to RealFFTf() function
    int i;
    HFFT hFFT = GetFFT(NumSamples);
    float *pFFT = new float[NumSamples];
@@ -409,73 +340,6 @@ void PowerSpectrum(int NumSamples, float *In, float *Out)
    Out[i] = pFFT[1]*pFFT[1];
    delete [] pFFT;
    ReleaseFFT(hFFT);
-
-#else // EXPERIMENTAL_USE_REALFFTF
-
-   int Half = NumSamples / 2;
-   int i;
-
-   float theta = M_PI / Half;
-
-   float *tmpReal = new float[Half];
-   float *tmpImag = new float[Half];
-   float *RealOut = new float[Half];
-   float *ImagOut = new float[Half];
-
-   for (i = 0; i < Half; i++) {
-      tmpReal[i] = In[2 * i];
-      tmpImag[i] = In[2 * i + 1];
-   }
-
-   FFT(Half, 0, tmpReal, tmpImag, RealOut, ImagOut);
-
-   float wtemp = float (sin(0.5 * theta));
-
-   float wpr = -2.0 * wtemp * wtemp;
-   float wpi = -1.0 * float (sin(theta));
-   float wr = 1.0 + wpr;
-   float wi = wpi;
-
-   int i3;
-
-   float h1r, h1i, h2r, h2i, rt, it;
-
-   for (i = 1; i < Half / 2; i++) {
-
-      i3 = Half - i;
-
-      h1r = 0.5 * (RealOut[i] + RealOut[i3]);
-      h1i = 0.5 * (ImagOut[i] - ImagOut[i3]);
-      h2r = 0.5 * (ImagOut[i] + ImagOut[i3]);
-      h2i = -0.5 * (RealOut[i] - RealOut[i3]);
-
-      rt = h1r + wr * h2r - wi * h2i;
-      it = h1i + wr * h2i + wi * h2r;
-
-      Out[i] = rt * rt + it * it;
-
-      rt = h1r - wr * h2r + wi * h2i;
-      it = -h1i + wr * h2i + wi * h2r;
-
-      Out[i3] = rt * rt + it * it;
-
-      wr = (wtemp = wr) * wpr - wi * wpi + wr;
-      wi = wi * wpr + wtemp * wpi + wi;
-   }
-
-   rt = (h1r = RealOut[0]) + ImagOut[0];
-   it = h1r - ImagOut[0];
-   Out[0] = rt * rt + it * it;
-
-   rt = RealOut[Half / 2];
-   it = ImagOut[Half / 2];
-   Out[Half / 2] = rt * rt + it * it;
-
-   delete[]tmpReal;
-   delete[]tmpImag;
-   delete[]RealOut;
-   delete[]ImagOut;
-#endif // EXPERIMENTAL_USE_REALFFTF
 }
 
 /*
@@ -514,82 +378,323 @@ const wxChar *WindowFuncName(int whichFunction)
    }
 }
 
-void WindowFunc(int whichFunction, int NumSamples, float *in)
+void NewWindowFunc(int whichFunction, int NumSamples, bool extraSample, float *in)
 {
-   int i;
-   double A;
+   if (extraSample)
+      --NumSamples;
 
-   switch( whichFunction )
-   {
+   switch (whichFunction) {
    default:
-      fprintf(stderr,"FFT::WindowFunc - Invalid window function: %d\n",whichFunction);
+      fprintf(stderr, "FFT::WindowFunc - Invalid window function: %d\n", whichFunction);
       break;
    case eWinFuncRectangular:
+      // Multiply all by 1.0f -- do nothing
       break;
+
    case eWinFuncBartlett:
+   {
       // Bartlett (triangular) window
-      for (i = 0; i < NumSamples / 2; i++) {
-         in[i] *= (i / (float) (NumSamples / 2));
-         in[i + (NumSamples / 2)] *=
-             (1.0 - (i / (float) (NumSamples / 2)));
+      const int nPairs = (NumSamples - 1) / 2; // whether even or odd NumSamples, this is correct
+      const float denom = NumSamples / 2.0f;
+      in[0] = 0.0f;
+      for (int ii = 1;
+           ii <= nPairs; // Yes, <=
+           ++ii) {
+         const float value = ii / denom;
+         in[ii] *= value;
+         in[NumSamples - ii] *= value;
       }
+      // When NumSamples is even, in[half] should be multiplied by 1.0, so unchanged
+      // When odd, the value of 1.0 is not reached
+   }
       break;
    case eWinFuncHamming:
+   {
       // Hamming
-      for (i = 0; i < NumSamples; i++)
-         in[i] *= 0.54 - 0.46 * cos(2 * M_PI * i / (NumSamples - 1));
+      const double multiplier = 2 * M_PI / NumSamples;
+      static const double coeff0 = 0.54, coeff1 = -0.46;
+      for (int ii = 0; ii < NumSamples; ++ii)
+         in[ii] *= coeff0 + coeff1 * cos(ii * multiplier);
+   }
       break;
    case eWinFuncHanning:
+   {
       // Hanning
-      for (i = 0; i < NumSamples; i++)
-         in[i] *= 0.50 - 0.50 * cos(2 * M_PI * i / (NumSamples - 1));
+      const double multiplier = 2 * M_PI / NumSamples;
+      static const double coeff0 = 0.5, coeff1 = -0.5;
+      for (int ii = 0; ii < NumSamples; ++ii)
+         in[ii] *= coeff0 + coeff1 * cos(ii * multiplier);
+   }
       break;
    case eWinFuncBlackman:
+   {
       // Blackman
-      for (i = 0; i < NumSamples; i++) {
-          in[i] *= 0.42 - 0.5 * cos (2 * M_PI * i / (NumSamples - 1)) + 0.08 * cos (4 * M_PI * i / (NumSamples - 1));
-      }
+      const double multiplier = 2 * M_PI / NumSamples;
+      const double multiplier2 = 2 * multiplier;
+      static const double coeff0 = 0.42, coeff1 = -0.5, coeff2 = 0.08;
+      for (int ii = 0; ii < NumSamples; ++ii)
+         in[ii] *= coeff0 + coeff1 * cos(ii * multiplier) + coeff2 * cos(ii * multiplier2);
+   }
       break;
    case eWinFuncBlackmanHarris:
+   {
       // Blackman-Harris
-      for (i = 0; i < NumSamples; i++) {
-          in[i] *= 0.35875 - 0.48829 * cos(2 * M_PI * i /(NumSamples-1)) + 0.14128 * cos(4 * M_PI * i/(NumSamples-1)) - 0.01168 * cos(6 * M_PI * i/(NumSamples-1));
-      }
+      const double multiplier = 2 * M_PI / NumSamples;
+      const double multiplier2 = 2 * multiplier;
+      const double multiplier3 = 3 * multiplier;
+      static const double coeff0 = 0.35875, coeff1 = -0.48829, coeff2 = 0.14128, coeff3 = -0.01168;
+      for (int ii = 0; ii < NumSamples; ++ii)
+         in[ii] *= coeff0 + coeff1 * cos(ii * multiplier) + coeff2 * cos(ii * multiplier2) + coeff3 * cos(ii * multiplier3);
+   }
       break;
    case eWinFuncWelch:
+   {
       // Welch
-      for (i = 0; i < NumSamples; i++) {
-          in[i] *= 4*i/(float)NumSamples*(1-(i/(float)NumSamples));
+      const float N = NumSamples;
+      for (int ii = 0; ii < NumSamples; ++ii) {
+         const float iOverN = ii / N;
+         in[ii] *= 4 * iOverN * (1 - iOverN);
       }
+   }
+      break;
+   case eWinFuncGaussian25:
+   {
+      // Gaussian (a=2.5)
+      // Precalculate some values, and simplify the fmla to try and reduce overhead
+      static const double A = -2 * 2.5*2.5;
+      const float N = NumSamples;
+      for (int ii = 0; ii < NumSamples; ++ii) {
+         const float iOverN = ii / N;
+         // full
+         // in[ii] *= exp(-0.5*(A*((ii-NumSamples/2)/NumSamples/2))*(A*((ii-NumSamples/2)/NumSamples/2)));
+         // reduced
+         in[ii] *= exp(A * (0.25 + (iOverN * iOverN) - iOverN));
+      }
+   }
+      break;
+   case eWinFuncGaussian35:
+   {
+      // Gaussian (a=3.5)
+      static const double A = -2 * 3.5*3.5;
+      const float N = NumSamples;
+      for (int ii = 0; ii < NumSamples; ++ii) {
+         const float iOverN = ii / N;
+         in[ii] *= exp(A * (0.25 + (iOverN * iOverN) - iOverN));
+      }
+   }
+      break;
+   case eWinFuncGaussian45:
+   {
+      // Gaussian (a=4.5)
+      static const double A = -2 * 4.5*4.5;
+      const float N = NumSamples;
+      for (int ii = 0; ii < NumSamples; ++ii) {
+         const float iOverN = ii / N;
+         in[ii] *= exp(A * (0.25 + (iOverN * iOverN) - iOverN));
+      }
+   }
+      break;
+   }
+
+   if (extraSample && whichFunction != eWinFuncRectangular) {
+      double value = 0.0;
+      switch (whichFunction) {
+      case eWinFuncHamming:
+         value = 0.08;
+         break;
+      case eWinFuncGaussian25:
+         value = exp(-2 * 2.5 * 2.5 * 0.25);
+         break;
+      case eWinFuncGaussian35:
+         value = exp(-2 * 3.5 * 3.5 * 0.25);
+         break;
+      case eWinFuncGaussian45:
+         value = exp(-2 * 4.5 * 4.5 * 0.25);
+         break;
+      default:
+         break;
+      }
+      in[NumSamples] *= value;
+   }
+}
+
+// See cautions in FFT.h !
+void WindowFunc(int whichFunction, int NumSamples, float *in)
+{
+   bool extraSample = false;
+   switch (whichFunction)
+   {
+   case eWinFuncHamming:
+   case eWinFuncHanning:
+   case eWinFuncBlackman:
+   case eWinFuncBlackmanHarris:
+      extraSample = true;
+      break;
+   default:
+      break;
+   case eWinFuncBartlett:
+      // PRL:  Do nothing here either
+      // But I want to comment that the old function did this case
+      // wrong in the second half of the array, in case NumSamples was odd
+      // but I think that never happened, so I am not bothering to preserve that
+      break;
+   }
+   NewWindowFunc(whichFunction, NumSamples, extraSample, in);
+}
+
+void DerivativeOfWindowFunc(int whichFunction, int NumSamples, bool extraSample, float *in)
+{
+   if (eWinFuncRectangular == whichFunction)
+   {
+      // Rectangular
+      // There are deltas at the ends
+      --NumSamples;
+      // in[0] *= 1.0f;
+      for (int ii = 1; ii < NumSamples; ++ii)
+         in[ii] = 0.0f;
+      in[NumSamples] *= -1.0f;
+      return;
+   }
+
+   if (extraSample)
+      --NumSamples;
+
+   double A;
+   switch (whichFunction) {
+   case eWinFuncBartlett:
+   {
+      // Bartlett (triangular) window
+      // There are discontinuities in the derivative at the ends, and maybe at the midpoint
+      const int nPairs = (NumSamples - 1) / 2; // whether even or odd NumSamples, this is correct
+      const float value = 2.0f / NumSamples;
+      in[0] *=
+         // Average the two limiting values of discontinuous derivative
+         value / 2.0f;
+      for (int ii = 1;
+         ii <= nPairs; // Yes, <=
+         ++ii) {
+         in[ii] *= value;
+         in[NumSamples - ii] *= -value;
+      }
+      if (NumSamples % 2 == 0)
+         // Average the two limiting values of discontinuous derivative
+         in[NumSamples / 2] = 0.0f;
+      if (extraSample)
+         in[NumSamples] *=
+         // Average the two limiting values of discontinuous derivative
+            -value / 2.0f;
+      else
+         // Halve the multiplier previously applied
+         // Average the two limiting values of discontinuous derivative
+         in[NumSamples - 1] *= 0.5f;
+   }
+      break;
+   case eWinFuncHamming:
+   {
+      // Hamming
+      // There are deltas at the ends
+      const double multiplier = 2 * M_PI / NumSamples;
+      static const double coeff0 = 0.54, coeff1 = -0.46 * multiplier;
+      in[0] *= coeff0;
+      if (!extraSample)
+         --NumSamples;
+      for (int ii = 0; ii < NumSamples; ++ii)
+         in[ii] *= - coeff1 * sin(ii * multiplier);
+      if (extraSample)
+         in[NumSamples] *= - coeff0;
+      else
+         // slightly different
+         in[NumSamples] *= - coeff0 - coeff1 * sin(NumSamples * multiplier);
+   }
+      break;
+   case eWinFuncHanning:
+   {
+      // Hanning
+      const double multiplier = 2 * M_PI / NumSamples;
+      const double coeff1 = -0.5 * multiplier;
+      for (int ii = 0; ii < NumSamples; ++ii)
+         in[ii] *= - coeff1 * sin(ii * multiplier);
+      if (extraSample)
+         in[NumSamples] = 0.0f;
+   }
+      break;
+   case eWinFuncBlackman:
+   {
+      // Blackman
+      const double multiplier = 2 * M_PI / NumSamples;
+      const double multiplier2 = 2 * multiplier;
+      const double coeff1 = -0.5 * multiplier, coeff2 = 0.08 * multiplier2;
+      for (int ii = 0; ii < NumSamples; ++ii)
+         in[ii] *= - coeff1 * sin(ii * multiplier) - coeff2 * sin(ii * multiplier2);
+      if (extraSample)
+         in[NumSamples] = 0.0f;
+   }
+      break;
+   case eWinFuncBlackmanHarris:
+   {
+      // Blackman-Harris
+      const double multiplier = 2 * M_PI / NumSamples;
+      const double multiplier2 = 2 * multiplier;
+      const double multiplier3 = 3 * multiplier;
+      const double coeff1 = -0.48829 * multiplier,
+         coeff2 = 0.14128 * multiplier2, coeff3 = -0.01168 * multiplier3;
+      for (int ii = 0; ii < NumSamples; ++ii)
+         in[ii] *= - coeff1 * sin(ii * multiplier) - coeff2 * sin(ii * multiplier2) - coeff3 * sin(ii * multiplier3);
+      if (extraSample)
+         in[NumSamples] = 0.0f;
+   }
+      break;
+   case eWinFuncWelch:
+   {
+      // Welch
+      const float N = NumSamples;
+      const float NN = NumSamples * NumSamples;
+      for (int ii = 0; ii < NumSamples; ++ii) {
+         in[ii] *= 4 * (N - ii - ii) / NN;
+      }
+      if (extraSample)
+         in[NumSamples] = 0.0f;
+      // Average the two limiting values of discontinuous derivative
+      in[0] /= 2.0f;
+      in[NumSamples - 1] /= 2.0f;
+   }
       break;
    case eWinFuncGaussian25:
       // Gaussian (a=2.5)
-      // Precalculate some values, and simplify the fmla to try and reduce overhead
-      A=-2*2.5*2.5;
-
-      for (i = 0; i < NumSamples; i++) {
-          // full
-          // in[i] *= exp(-0.5*(A*((i-NumSamples/2)/NumSamples/2))*(A*((i-NumSamples/2)/NumSamples/2)));
-          // reduced
-          in[i] *= exp(A*(0.25 + ((i/(float)NumSamples)*(i/(float)NumSamples)) - (i/(float)NumSamples)));
-      }
-      break;
+      A = -2 * 2.5*2.5;
+      goto Gaussian;
    case eWinFuncGaussian35:
       // Gaussian (a=3.5)
-      A=-2*3.5*3.5;
-      for (i = 0; i < NumSamples; i++) {
-          // reduced
-          in[i] *= exp(A*(0.25 + ((i/(float)NumSamples)*(i/(float)NumSamples)) - (i/(float)NumSamples)));
-      }
-      break;
+      A = -2 * 3.5*3.5;
+      goto Gaussian;
    case eWinFuncGaussian45:
       // Gaussian (a=4.5)
-      A=-2*4.5*4.5;
-
-      for (i = 0; i < NumSamples; i++) {
-          // reduced
-          in[i] *= exp(A*(0.25 + ((i/(float)NumSamples)*(i/(float)NumSamples)) - (i/(float)NumSamples)));
+      A = -2 * 4.5*4.5;
+      goto Gaussian;
+   Gaussian:
+   {
+      // Gaussian (a=2.5)
+      // There are deltas at the ends
+      const float invN = 1.0f / NumSamples;
+      const float invNN = invN * invN;
+      // Simplify formula from the loop for ii == 0, add term for the delta
+      in[0] *= exp(A * 0.25) * (1 - invN);
+      if (!extraSample)
+         --NumSamples;
+      for (int ii = 1; ii < NumSamples; ++ii) {
+         const float iOverN = ii * invN;
+         in[ii] *= exp(A * (0.25 + (iOverN * iOverN) - iOverN)) * (2 * ii * invNN - invN);
       }
+      if (extraSample)
+         in[NumSamples] *= exp(A * 0.25) * (invN - 1);
+      else {
+         // Slightly different
+         const float iOverN = NumSamples * invN;
+         in[NumSamples] *= exp(A * (0.25 + (iOverN * iOverN) - iOverN)) * (2 * NumSamples * invNN - invN - 1);
+      }
+   }
       break;
+   default:
+      fprintf(stderr, "FFT::DerivativeOfWindowFunc - Invalid window function: %d\n", whichFunction);
    }
 }

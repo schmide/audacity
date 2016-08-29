@@ -30,6 +30,9 @@
 
 *//*******************************************************************/
 
+#include "Audacity.h"
+#include "Tags.h"
+
 // For compilers that support precompilation, includes "wx/wx.h".
 #include <wx/wxprec.h>
 
@@ -38,9 +41,6 @@
 #include <wx/window.h>
 #endif
 
-#include "Tags.h"
-
-#include "Audacity.h"
 #include "FileDialog.h"
 #include "FileNames.h"
 #include "Internat.h"
@@ -233,6 +233,11 @@ Tags::~Tags()
 {
 }
 
+std::shared_ptr<Tags> Tags::Duplicate() const
+{
+   return std::make_shared<Tags>(*this);
+}
+
 Tags & Tags::operator=(const Tags & src)
 {
    mEditTitle = src.mEditTitle;
@@ -295,6 +300,42 @@ void Tags::Clear()
 {
    mXref.clear();
    mMap.clear();
+}
+
+namespace {
+   bool EqualMaps(const TagMap &map1, const TagMap &map2)
+   {
+      for (auto it1 = map1.begin(), end1 = map1.end(),
+           it2 = map2.begin(), end2 = map2.end();
+           it1 != end1 || it2 != end2;) {
+         if (it1 == end1 || it2 == end2)
+            return false;
+         else if (it1->first != it2->first)
+            return false;
+         else if (it1->second != it2->second)
+            return false;
+         else
+            ++it1, ++it2;
+      }
+      return true;
+   }
+}
+
+bool operator== (const Tags &lhs, const Tags &rhs)
+{
+   if (!EqualMaps(lhs.mXref, rhs.mXref))
+      return false;
+
+   if (!EqualMaps(lhs.mMap, rhs.mMap))
+      return false;
+
+   return
+      lhs.mGenres == rhs.mGenres
+      &&
+      lhs.mEditTitle == rhs.mEditTitle
+      &&
+      lhs.mEditTrackNumber == rhs.mEditTrackNumber
+   ;
 }
 
 void Tags::AllowEditTitle(bool editTitle)
@@ -371,53 +412,38 @@ int Tags::GetGenre(const wxString & name)
    return 255;
 }
 
-bool Tags::HasTag(const wxString & name)
+bool Tags::HasTag(const wxString & name) const
 {
    wxString key = name;
    key.UpperCase();
 
-   TagMap::iterator iter = mXref.find(key);
+   auto iter = mXref.find(key);
    return (iter != mXref.end());
 }
 
-wxString Tags::GetTag(const wxString & name)
+wxString Tags::GetTag(const wxString & name) const
 {
    wxString key = name;
    key.UpperCase();
 
-   TagMap::iterator iter = mXref.find(key);
+   auto iter = mXref.find(key);
 
    if (iter == mXref.end()) {
       return wxEmptyString;
    }
 
-   return mMap[iter->second];
+   auto iter2 = mMap.find(iter->second);
+   if (iter2 == mMap.end()) {
+      wxASSERT(false);
+      return wxEmptyString;
+   }
+   else
+      return iter2->second;
 }
 
-bool Tags::GetFirst(wxString & name, wxString & value)
+Tags::Iterators Tags::GetRange() const
 {
-   mIter = mMap.begin();
-   if (mIter == mMap.end()) {
-      return false;
-   }
-
-   name = mIter->first;
-   value = mIter->second;
-
-   return true;
-}
-
-bool Tags::GetNext(wxString & name, wxString & value)
-{
-   ++mIter;
-   if (mIter == mMap.end()) {
-      return false;
-   }
-
-   name = mIter->first;
-   value = mIter->second;
-
-   return true;
+   return { mMap.begin(), mMap.end() };
 }
 
 void Tags::SetTag(const wxString & name, const wxString & value)
@@ -434,28 +460,35 @@ void Tags::SetTag(const wxString & name, const wxString & value)
    // Look it up
    TagMap::iterator iter = mXref.find(key);
 
-   // Didn't find the tag
-   if (iter == mXref.end()) {
-      // Intention was to delete so no need to add it
-      if (value.IsEmpty()) {
-         return;
-      }
-
-      // Add a new tag
-      mXref[key] = name;
-      mMap[name] = value;
-      return;
-   }
-
-   // Intention was to delete
    if (value.IsEmpty()) {
-      mMap.erase(iter->second);
-      mXref.erase(iter);
-      return;
+      // Erase the tag
+      if (iter == mXref.end())
+         // nothing to do
+         ;
+      else {
+         mMap.erase(iter->second);
+         mXref.erase(iter);
+      }
    }
+   else {
+      if (iter == mXref.end()) {
+         // Didn't find the tag
 
-   // Update the value
-   mMap[iter->second] = value;
+         // Add a NEW tag
+         mXref[key] = name;
+         mMap[name] = value;
+      }
+      else if (!iter->second.IsSameAs(name)) {
+         // Watch out for case differences!
+         mMap[name] = value;
+         mMap.erase(iter->second);
+         iter->second = name;
+      }
+      else {
+         // Update the value
+         mMap[iter->second] = value;
+      }
+   }
 }
 
 void Tags::SetTag(const wxString & name, const int & value)
@@ -521,8 +554,9 @@ void Tags::WriteXML(XMLWriter &xmlFile)
 {
    xmlFile.StartTag(wxT("tags"));
 
-   wxString n, v;
-   for (bool cont = GetFirst(n, v); cont; cont = GetNext(n, v)) {
+   for (const auto &pair : GetRange()) {
+      const auto &n = pair.first;
+      const auto &v = pair.second;
       xmlFile.StartTag(wxT("tag"));
       xmlFile.WriteAttr(wxT("name"), n);
       xmlFile.WriteAttr(wxT("value"), v);
@@ -532,7 +566,7 @@ void Tags::WriteXML(XMLWriter &xmlFile)
    xmlFile.EndTag(wxT("tags"));
 }
 
-bool Tags::ShowEditDialog(wxWindow *parent, wxString title, bool force)
+bool Tags::ShowEditDialog(wxWindow *parent, const wxString &title, bool force)
 {
    if (force) {
       TagsEditor dlg(parent, title, this, mEditTitle, mEditTrackNumber);
@@ -546,7 +580,7 @@ bool Tags::ShowEditDialog(wxWindow *parent, wxString title, bool force)
 // ComboEditor - Wrapper to prevent unwanted background erasure
 //
 
-class ComboEditor:public wxGridCellChoiceEditor
+class ComboEditor final : public wxGridCellChoiceEditor
 {
 public:
    ComboEditor(const wxArrayString& choices, bool allowOthers = false)
@@ -554,7 +588,7 @@ public:
    {
    }
 
-   virtual void PaintBackground(const wxRect& WXUNUSED(rectCell), wxGridCellAttr * WXUNUSED(attr))
+   void PaintBackground(wxDC&, const wxRect& WXUNUSED(rectCell), const wxGridCellAttr & WXUNUSED(attr)) override
    {
       // Ignore it (a must on the Mac as the erasure causes problems.)
    }
@@ -563,7 +597,7 @@ public:
    {
       wxGridCellChoiceEditor::SetParameters(params);
 
-      // Refresh the wxComboBox with new values
+      // Refresh the wxComboBox with NEW values
       if (Combo()) {
          Combo()->Clear();
          Combo()->Append(m_choices);
@@ -581,6 +615,59 @@ public:
 
       wxGridCellChoiceEditor::SetSize(rect);
    }
+
+   // Fix for Bug 1389
+   // July 2016: ANSWER-ME: Does this need reporting upstream to wxWidgets?
+   virtual void StartingKey(wxKeyEvent& event)
+   {
+       // Lifted from wxGridCellTextEditor and adapted to combo.
+
+       // [Below is comment from wxWidgets code]
+       // Since this is now happening in the EVT_CHAR event EmulateKeyPress is no
+       // longer an appropriate way to get the character into the text control.
+       // Do it ourselves instead.  We know that if we get this far that we have
+       // a valid character, so not a whole lot of testing needs to be done.
+
+       //The only difference to wxGridCellTextEditor.
+       //wxTextCtrl* tc = (wxTextCtrl *)m_control;
+       wxComboBox * tc = Combo();
+       int ch;
+
+       bool isPrintable;
+
+   #if wxUSE_UNICODE
+       ch = event.GetUnicodeKey();
+       if ( ch != WXK_NONE )
+           isPrintable = true;
+       else
+   #endif // wxUSE_UNICODE
+       {
+           ch = event.GetKeyCode();
+           isPrintable = ch >= WXK_SPACE && ch < WXK_START;
+       }
+
+       switch (ch)
+       {
+           case WXK_DELETE:
+               // Delete the initial character when starting to edit with DELETE.
+               tc->Remove(0, 1);
+               break;
+
+           case WXK_BACK:
+               // Delete the last character when starting to edit with BACKSPACE.
+               {
+                   const long pos = tc->GetLastPosition();
+                   tc->Remove(pos - 1, pos);
+               }
+               break;
+
+           default:
+               if ( isPrintable )
+                   tc->WriteText(static_cast<wxChar>(ch));
+               break;
+       }
+   }
+
 };
 
 //
@@ -635,12 +722,8 @@ enum {
    RemoveID
 };
 
-BEGIN_EVENT_TABLE(TagsEditor, wxDialog)
-#if wxCHECK_VERSION(3,0,0)
+BEGIN_EVENT_TABLE(TagsEditor, wxDialogWrapper)
    EVT_GRID_CELL_CHANGED(TagsEditor::OnChange)
-#else
-   EVT_GRID_CELL_CHANGE(TagsEditor::OnChange)
-#endif
    EVT_BUTTON(EditID, TagsEditor::OnEdit)
    EVT_BUTTON(ResetID, TagsEditor::OnReset)
    EVT_BUTTON(ClearID, TagsEditor::OnClear)
@@ -651,19 +734,22 @@ BEGIN_EVENT_TABLE(TagsEditor, wxDialog)
    EVT_BUTTON(RemoveID, TagsEditor::OnRemove)
    EVT_BUTTON(wxID_CANCEL, TagsEditor::OnCancel)
    EVT_BUTTON(wxID_OK, TagsEditor::OnOk)
+   EVT_KEY_DOWN(TagsEditor::OnKeyDown)
 END_EVENT_TABLE()
 
 TagsEditor::TagsEditor(wxWindow * parent,
-                       wxString title,
+                       const wxString &title,
                        Tags * tags,
                        bool editTitle,
                        bool editTrack)
-:  wxDialog(parent, wxID_ANY, title, wxDefaultPosition, wxDefaultSize,
+:  wxDialogWrapper(parent, wxID_ANY, title, wxDefaultPosition, wxDefaultSize,
             wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER),
    mTags(tags),
    mEditTitle(editTitle),
    mEditTrack(editTrack)
 {
+   SetName(GetTitle());
+
    names[0] = LABEL_ARTIST;
    names[1] = LABEL_TITLE;
    names[2] = LABEL_ALBUM;
@@ -737,12 +823,15 @@ TagsEditor::TagsEditor(wxWindow * parent,
 
 TagsEditor::~TagsEditor()
 {
-   delete mGrid;
+   // This DELETE is not needed because wxWidgets owns the grid.
+// DELETE mGrid;
+
 // TODO:  Need to figure out if these should be deleted.  Looks like the wxGrid
 //        code takes ownership and uses reference counting, but there's been
 //        cases where they show up as memory leaks.
-//   delete mStringRenderer;
-//   delete mComboEditor;
+//  PRL: Fixed the leaks, see commit c87eb0804bc5f40659b133cab6e2ade061959645
+//   DELETE mStringRenderer;
+//   DELETE mComboEditor;
 }
 
 void TagsEditor::PopulateOrExchange(ShuttleGui & S)
@@ -756,16 +845,15 @@ void TagsEditor::PopulateOrExchange(ShuttleGui & S)
       S.EndHorizontalLay();
 
       if (mGrid == NULL) {
-         mGrid = new Grid(S.GetParent(),
+         mGrid = safenew Grid(S.GetParent(),
                           wxID_ANY,
                           wxDefaultPosition,
                           wxDefaultSize,
                           wxSUNKEN_BORDER);
 
-         mStringRenderer = new wxGridCellStringRenderer;
-         mComboEditor = new ComboEditor(wxArrayString(), true);
-
-         mGrid->RegisterDataType(wxT("Combo"), mStringRenderer, mComboEditor);
+         mGrid->RegisterDataType(wxT("Combo"),
+            (mStringRenderer = safenew wxGridCellStringRenderer),
+            (mComboEditor = safenew ComboEditor(wxArrayString(), true)));
 
          mGrid->SetColLabelSize(mGrid->GetDefaultRowSize());
 
@@ -876,8 +964,7 @@ bool TagsEditor::TransferDataFromWindow()
 bool TagsEditor::TransferDataToWindow()
 {
    size_t i;
-   wxString n;
-   wxString v;
+   TagMap popTagMap;
 
    // Disable redrawing until we're done
    mGrid->BeginBatch();
@@ -903,16 +990,19 @@ bool TagsEditor::TransferDataToWindow()
          mGrid->SetReadOnly(i, 1);
       }
 
-      mLocal.SetTag(labelmap[i].name, wxEmptyString);
+      popTagMap[ labelmap[i].name ] = mGrid->GetCellValue(i, 1);
    }
 
    // Populate the rest
-   for (bool cont = mLocal.GetFirst(n, v); cont; cont = mLocal.GetNext(n, v)) {
-      mGrid->AppendRows();
-
-      mGrid->SetCellValue(i, 0, n);
-      mGrid->SetCellValue(i, 1, v);
-      i++;
+   for (const auto &pair : mLocal.GetRange()) {
+      const auto &n = pair.first;
+      const auto &v = pair.second;
+      if (popTagMap.find(n) == popTagMap.end()) {
+         mGrid->AppendRows();
+         mGrid->SetCellValue(i, 0, n);
+         mGrid->SetCellValue(i, 1, v);
+         i++;
+      }
    }
 
    // Add an extra one to help with initial sizing and to show it can be done
@@ -923,6 +1013,8 @@ bool TagsEditor::TransferDataToWindow()
 
    // Set the editors
    SetEditors();
+   Layout();
+   Fit();
 
    return true;
 }
@@ -964,9 +1056,10 @@ void TagsEditor::OnEdit(wxCommandEvent & WXUNUSED(event))
       mGrid->HideCellEditControl();
    }
 
-   wxDialog dlg(this, wxID_ANY, _("Edit Genres"),
+   wxDialogWrapper dlg(this, wxID_ANY, _("Edit Genres"),
                 wxDefaultPosition, wxDefaultSize,
                 wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
+   dlg.SetName(dlg.GetTitle());
    wxTextCtrl *tc;
 
    ShuttleGui S(&dlg, eIsCreating);
@@ -1162,14 +1255,12 @@ void TagsEditor::OnSave(wxCommandEvent & WXUNUSED(event))
       // Close the file
       writer.Close();
    }
-   catch (XMLFileWriterException* pException)
+   catch (const XMLFileWriterException &exception)
    {
       wxMessageBox(wxString::Format(
          _("Couldn't write to file \"%s\": %s"),
-         fn.c_str(), pException->GetMessage().c_str()),
+         fn.c_str(), exception.GetMessage().c_str()),
          _("Error Saving Tags File"), wxICON_ERROR, this);
-
-      delete pException;
    }
 }
 
@@ -1196,8 +1287,9 @@ void TagsEditor::OnSaveDefaults(wxCommandEvent & WXUNUSED(event))
    gPrefs->DeleteGroup(wxT("/Tags"));
 
    // Write out each tag
-   wxString n, v;
-   for (bool cont = mLocal.GetFirst(n, v); cont; cont = mLocal.GetNext(n, v)) {
+   for (const auto &pair : mLocal.GetRange()) {
+      const auto &n = pair.first;
+      const auto &v = pair.second;
       gPrefs->Write(wxT("/Tags/") + n, v);
    }
    gPrefs->Flush();
@@ -1241,7 +1333,6 @@ void TagsEditor::OnOk(wxCommandEvent & WXUNUSED(event))
    if (mGrid->IsCellEditControlShown()) {
       mGrid->SaveEditControlValue();
       mGrid->HideCellEditControl();
-      return;
    }
 
    if (!Validate() || !TransferDataFromWindow()) {
@@ -1262,15 +1353,33 @@ void TagsEditor::OnOk(wxCommandEvent & WXUNUSED(event))
 
 void TagsEditor::OnCancel(wxCommandEvent & WXUNUSED(event))
 {
+   DoCancel(false);
+}
+
+void TagsEditor::DoCancel(bool escKey)
+{
    if (mGrid->IsCellEditControlShown()) {
-      mGrid->GetCellEditor(mGrid->GetGridCursorRow(),
-                           mGrid->GetGridCursorCol())
-                           ->Reset();
+      auto editor = mGrid->GetCellEditor(mGrid->GetGridCursorRow(),
+         mGrid->GetGridCursorCol());
+      editor->Reset();
+      // To avoid memory leak, don't forget DecRef()!
+      editor->DecRef();
       mGrid->HideCellEditControl();
-      return;
    }
 
+   auto focus = wxWindow::FindFocus();
+   if (escKey && focus == mGrid)
+      return;
+
    EndModal(wxID_CANCEL);
+}
+
+void TagsEditor::OnKeyDown(wxKeyEvent &event)
+{
+   if (event.GetKeyCode() == WXK_ESCAPE)
+      DoCancel(true);
+   else
+      event.Skip();
 }
 
 void TagsEditor::SetEditors()
@@ -1280,6 +1389,7 @@ void TagsEditor::SetEditors()
    for (int i = 0; i < cnt; i++) {
       wxString label = mGrid->GetCellValue(i, 0);
       if (label.CmpNoCase(LABEL_GENRE) == 0) {
+         // This use of GetDefaultEditorForType does not require DecRef.
          mGrid->SetCellEditor(i, 1, mGrid->GetDefaultEditorForType(wxT("Combo")));
       }
       else {
@@ -1303,7 +1413,11 @@ void TagsEditor::PopulateGenres()
       parm = parm + (i == 0 ? wxT("") : wxT(",")) + g[i];
    }
 
-   mGrid->GetDefaultEditorForType(wxT("Combo"))->SetParameters(parm);
+   // Here was a memory leak!  wxWidgets docs for wxGrid::GetDefaultEditorForType() say:
+   // "The caller must call DecRef() on the returned pointer."
+   auto editor = mGrid->GetDefaultEditorForType(wxT("Combo"));
+   editor->SetParameters(parm);
+   editor->DecRef();
 }
 
 bool TagsEditor::IsWindowRectValid(const wxRect *windowRect) const

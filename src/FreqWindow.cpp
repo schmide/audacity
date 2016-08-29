@@ -41,15 +41,9 @@ and in the spectrogram spectral selection.
 
 
 #include "Audacity.h"
+#include "FreqWindow.h"
 
-// For compilers that support precompilation, includes "wx/wx.h".
-#include <wx/wxprec.h>
-
-
-
-#ifdef __BORLANDC__
-#pragma hdrstop
-#endif
+#include <algorithm>
 
 #include <wx/brush.h>
 #include <wx/button.h>
@@ -70,12 +64,12 @@ and in the spectrogram spectral selection.
 
 #include <math.h>
 
-#include "FreqWindow.h"
-
+#include "ShuttleGui.h"
 #include "AColor.h"
 #include "FFT.h"
 #include "Internat.h"
 #include "PitchName.h"
+#include "prefs/GUISettings.h"
 #include "Prefs.h"
 #include "Project.h"
 #include "WaveClip.h"
@@ -84,10 +78,9 @@ and in the spectrogram spectral selection.
 
 #include "FileDialog.h"
 
-#if defined(__WXGTK__)
-#define GSocket GSocketHack
-#include <gtk/gtkwidget.h>
-#endif
+#include "WaveTrack.h"
+
+#include "Experimental.h"
 
 DEFINE_EVENT_TYPE(EVT_FREQWINDOW_RECALC);
 
@@ -164,7 +157,7 @@ static const char * ZoomOut[] = {
 
 // FreqWindow
 
-BEGIN_EVENT_TABLE(FreqWindow, wxDialog)
+BEGIN_EVENT_TABLE(FreqWindow, wxDialogWrapper)
    EVT_CLOSE(FreqWindow::OnCloseWindow)
    EVT_SIZE(FreqWindow::OnSize)
    EVT_SLIDER(FreqZoomSliderID, FreqWindow::OnZoomSlider)
@@ -194,12 +187,13 @@ SpectrumAnalyst::~SpectrumAnalyst()
 FreqWindow::FreqWindow(wxWindow * parent, wxWindowID id,
                            const wxString & title,
                            const wxPoint & pos)
-:  wxDialog(parent, id, title, pos, wxDefaultSize,
+:  wxDialogWrapper(parent, id, title, pos, wxDefaultSize,
             wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxMAXIMIZE_BOX),
    mData(NULL),
-   mBitmap(NULL),
-   mAnalyst(new SpectrumAnalyst())
+   mAnalyst(std::make_unique<SpectrumAnalyst>())
 {
+   SetName(GetTitle());
+
    mMouseX = 0;
    mMouseY = 0;
    mRate = 0;
@@ -244,13 +238,13 @@ FreqWindow::FreqWindow(wxWindow * parent, wxWindowID id,
    axisChoices.Add(_("Log frequency"));
 
    mFreqFont = wxFont(fontSize, wxFONTFAMILY_SWISS, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
-   mArrowCursor = new wxCursor(wxCURSOR_ARROW);
-   mCrossCursor = new wxCursor(wxCURSOR_CROSS);
+   mArrowCursor = std::make_unique<wxCursor>(wxCURSOR_ARROW);
+   mCrossCursor = std::make_unique<wxCursor>(wxCURSOR_CROSS);
 
    gPrefs->Read(wxT("/FreqWindow/DrawGrid"), &mDrawGrid, true);
 
    long size;
-   gPrefs->Read(wxT("/FreqWindow/SizeChoice"), &mSize, 2);
+   gPrefs->Read(wxT("/FreqWindow/SizeChoice"), &mSize, 3);
    sizeChoices[mSize].ToLong(&size);
    mWindowSize = size;
 
@@ -259,8 +253,8 @@ FreqWindow::FreqWindow(wxWindow * parent, wxWindowID id,
    mAlg = static_cast<SpectrumAnalyst::Algorithm>(alg);
 
    gPrefs->Read(wxT("/FreqWindow/FuncChoice"), &mFunc, 3);
-   gPrefs->Read(wxT("/FreqWindow/AxisChoice"), &mAxis, 0);
-   gPrefs->Read(wxT("/GUI/EnvdBRange"), &dBRange, ENV_DB_RANGE);
+   gPrefs->Read(wxT("/FreqWindow/AxisChoice"), &mAxis, 1);
+   gPrefs->Read(ENV_DB_KEY, &dBRange, ENV_DB_RANGE);
    if(dBRange < 90.)
       dBRange = 90.;
 
@@ -282,7 +276,7 @@ FreqWindow::FreqWindow(wxWindow * parent, wxWindowID id,
 
       S.StartVerticalLay(2);
       {
-         vRuler = new RulerPanel(this, wxID_ANY);
+         vRuler = safenew RulerPanel(this, wxID_ANY);
          vRuler->ruler.SetBounds(0, 0, 100, 100); // Ruler can't handle small sizes
          vRuler->ruler.SetOrientation(wxVERTICAL);
          vRuler->ruler.SetRange(0.0, -dBRange);
@@ -291,7 +285,7 @@ FreqWindow::FreqWindow(wxWindow * parent, wxWindowID id,
          vRuler->ruler.SetLabelEdges(true);
          int w;
          vRuler->ruler.GetMaxSize(&w, NULL);
-         vRuler->SetSize(wxSize(w, 150));  // height needed for wxGTK
+         vRuler->SetMinSize(wxSize(w, 150));  // height needed for wxGTK
 
          S.AddSpace(wxDefaultCoord, 1);
          S.Prop(1);
@@ -300,16 +294,16 @@ FreqWindow::FreqWindow(wxWindow * parent, wxWindowID id,
       }
       S.EndVerticalLay();
 
-      mFreqPlot = new FreqPlot(this);
+      mFreqPlot = safenew FreqPlot(this);
       mFreqPlot->SetMinSize(wxSize(wxDefaultCoord, FREQ_WINDOW_HEIGHT));
       S.Prop(1);
-      S.AddWindow(mFreqPlot, wxEXPAND | wxALIGN_CENTRE);
+      S.AddWindow(mFreqPlot, wxEXPAND);
 
       S.StartHorizontalLay(wxEXPAND, 0);
       {
          S.StartVerticalLay();
          {
-            mPanScroller = new wxScrollBar(this, FreqPanScrollerID,
+            mPanScroller = safenew wxScrollBar(this, FreqPanScrollerID,
                wxDefaultPosition, wxDefaultSize, wxSB_VERTICAL);
             mPanScroller->SetName(_("Scroll"));
             S.Prop(1);
@@ -319,12 +313,12 @@ FreqWindow::FreqWindow(wxWindow * parent, wxWindowID id,
 
          S.StartVerticalLay();
          {
-            wxStaticBitmap *zi = new wxStaticBitmap(this, wxID_ANY, wxBitmap(ZoomIn));
+            wxStaticBitmap *zi = safenew wxStaticBitmap(this, wxID_ANY, wxBitmap(ZoomIn));
             S.AddWindow((wxWindow *) zi, wxALIGN_CENTER);
 
             S.AddSpace(5);
 
-            mZoomSlider = new wxSlider(this, FreqZoomSliderID, 100, 1, 100,
+            mZoomSlider = safenew wxSlider(this, FreqZoomSliderID, 100, 1, 100,
                wxDefaultPosition, wxDefaultSize, wxSL_VERTICAL);
             S.Prop(1);
             S.AddWindow(mZoomSlider, wxALIGN_CENTER_HORIZONTAL);
@@ -332,7 +326,7 @@ FreqWindow::FreqWindow(wxWindow * parent, wxWindowID id,
 
             S.AddSpace(5);
 
-            wxStaticBitmap *zo = new wxStaticBitmap(this, wxID_ANY, wxBitmap(ZoomOut));
+            wxStaticBitmap *zo = safenew wxStaticBitmap(this, wxID_ANY, wxBitmap(ZoomOut));
             S.AddWindow((wxWindow *) zo, wxALIGN_CENTER);
          }
          S.EndVerticalLay();
@@ -349,7 +343,7 @@ FreqWindow::FreqWindow(wxWindow * parent, wxWindowID id,
 
       S.StartHorizontalLay(wxEXPAND, 0);
       {
-         hRuler  = new RulerPanel(this, wxID_ANY);
+         hRuler  = safenew RulerPanel(this, wxID_ANY);
          hRuler->ruler.SetBounds(0, 0, 100, 100); // Ruler can't handle small sizes
          hRuler->ruler.SetOrientation(wxHORIZONTAL);
          hRuler->ruler.SetLog(true);
@@ -454,12 +448,14 @@ FreqWindow::FreqWindow(wxWindow * parent, wxWindowID id,
       mFuncChoice = S.Id(FreqFuncChoiceID).AddChoice(_("&Function:"), wxT(""), &funcChoices);
       mFuncChoice->SetSelection(mFunc);
       S.SetSizeHints(wxDefaultCoord, wxDefaultCoord);
+      mFuncChoice->MoveAfterInTabOrder(mSizeChoice);
 
       S.AddSpace(5);
 
       mAxisChoice = S.Id(FreqAxisChoiceID).AddChoice(_("&Axis:"), wxT(""), &axisChoices);
       mAxisChoice->SetSelection(mAxis);
       S.SetSizeHints(wxDefaultCoord, wxDefaultCoord);
+      mAxisChoice->MoveAfterInTabOrder(mFuncChoice);
 
       S.AddSpace(5);
 
@@ -477,11 +473,11 @@ FreqWindow::FreqWindow(wxWindow * parent, wxWindowID id,
    // -------------------------------------------------------------------
    // ROW 8: Spacer
    // -------------------------------------------------------------------
-   
+
    S.AddSpace(5);
 
-   mProgress = new FreqGauge(this); //, wxID_ANY, wxST_SIZEGRIP);
-   S.AddWindow(mProgress, wxEXPAND | wxALIGN_BOTTOM);
+   mProgress = safenew FreqGauge(this); //, wxID_ANY, wxST_SIZEGRIP);
+   S.AddWindow(mProgress, wxEXPAND);
 
    // Log-frequency axis works for spectrum plots only.
    if (mAlg != SpectrumAnalyst::Spectrum)
@@ -490,7 +486,7 @@ FreqWindow::FreqWindow(wxWindow * parent, wxWindowID id,
       mAxisChoice->Disable();
    }
    mLogAxis = mAxis != 0;
-         
+
    mCloseButton->SetDefault();
    mCloseButton->SetFocus();
 
@@ -512,18 +508,14 @@ FreqWindow::FreqWindow(wxWindow * parent, wxWindowID id,
    //
    // I guess the only way round it would be to handle key actions
    // ourselves, but we'll leave that for a future date.
-   GTK_WIDGET_SET_FLAGS(mPanScroller->m_widget, GTK_CAN_FOCUS);
+//   gtk_widget_set_can_focus(mPanScroller->m_widget, true);
 #endif
 }
 
 FreqWindow::~FreqWindow()
 {
-   if (mBitmap)
-      delete mBitmap;
    if (mData)
       delete[] mData;
-   delete mArrowCursor;
-   delete mCrossCursor;
 }
 
 bool FreqWindow::Show(bool show)
@@ -535,16 +527,19 @@ bool FreqWindow::Show(bool show)
 
    bool shown = IsShown();
 
-   bool res = wxDialog::Show(show);
-
    if (show && !shown)
    {
-      gPrefs->Read(wxT("/GUI/EnvdBRange"), &dBRange, ENV_DB_RANGE);
+      gPrefs->Read(ENV_DB_KEY, &dBRange, ENV_DB_RANGE);
       if(dBRange < 90.)
          dBRange = 90.;
       GetAudio();
-      SendRecalcEvent();
+      // Don't send an event.  We need the recalc right away.
+      // so that mAnalyst is valid when we paint.
+      //SendRecalcEvent();
+      Recalc();
    }
+
+   bool res = wxDialogWrapper::Show(show);
 
    return res;
 }
@@ -553,6 +548,7 @@ void FreqWindow::GetAudio()
 {
    if (mData) {
       delete [] mData;
+      mData = NULL;
    }
    mDataLen = 0;
 
@@ -565,14 +561,15 @@ void FreqWindow::GetAudio()
          WaveTrack *track = (WaveTrack *)t;
          if (selcount==0) {
             mRate = track->GetRate();
-            sampleCount start, end;
-            start = track->TimeToLongSamples(p->mViewInfo.selectedRegion.t0());
-            end = track->TimeToLongSamples(p->mViewInfo.selectedRegion.t1());
-            mDataLen = (sampleCount)(end - start);
-            if (mDataLen > 10485760) {
+            auto start = track->TimeToLongSamples(p->mViewInfo.selectedRegion.t0());
+            auto end = track->TimeToLongSamples(p->mViewInfo.selectedRegion.t1());
+            auto dataLen = end - start;
+            if (dataLen > 10485760) {
                warning = true;
                mDataLen = 10485760;
             }
+            else
+               mDataLen = dataLen;
             mData = new float[mDataLen];
             track->Get((samplePtr)mData, floatSample, start, mDataLen);
          }
@@ -584,8 +581,7 @@ void FreqWindow::GetAudio()
                mDataLen = 0;
                return;
             }
-            sampleCount start;
-            start = track->TimeToLongSamples(p->mViewInfo.selectedRegion.t0());
+            auto start = track->TimeToLongSamples(p->mViewInfo.selectedRegion.t0());
             float *buffer2 = new float[mDataLen];
             track->Get((samplePtr)buffer2, floatSample, start, mDataLen);
             for (int i = 0; i < mDataLen; i++)
@@ -621,15 +617,11 @@ void FreqWindow::DrawBackground(wxMemoryDC & dc)
 {
    Layout();
 
-   if (mBitmap)
-   {
-      delete mBitmap;
-      mBitmap = NULL;
-   }
+   mBitmap.reset();
 
    mPlotRect = mFreqPlot->GetClientRect();
 
-   mBitmap = new wxBitmap(mPlotRect.width, mPlotRect.height);
+   mBitmap = std::make_unique<wxBitmap>(mPlotRect.width, mPlotRect.height);
 
    dc.SelectObject(*mBitmap);
 
@@ -645,7 +637,7 @@ void FreqWindow::DrawBackground(wxMemoryDC & dc)
 
 void FreqWindow::DrawPlot()
 {
-   if (!mData || mDataLen < mWindowSize) {
+   if (!mData || mDataLen < mWindowSize || mAnalyst->GetProcessedSize() == 0) {
       wxMemoryDC memDC;
 
       vRuler->ruler.SetLog(false);
@@ -861,7 +853,8 @@ void FreqWindow::PlotPaint(wxPaintEvent & event)
    wxPaintDC dc( (wxWindow *) event.GetEventObject() );
 
    dc.DrawBitmap( *mBitmap, 0, 0, true );
-   if (!mData)
+   // Fix for Bug 1226 "Plot Spectrum freezes... if insufficient samples selected"
+   if (!mData || mDataLen < mWindowSize)
       return;
 
    dc.SetFont(mFreqFont);
@@ -995,14 +988,20 @@ void FreqWindow::Recalc()
    int windowFunc = mFuncChoice->GetSelection();
 
    wxWindow *hadFocus = FindFocus();
-   wxWindowDisabler *blocker = new wxWindowDisabler(mProgress);
-   wxYieldIfNeeded();
+   // In wxMac, the skipped window MUST be a top level window.  I'd originally made it
+   // just the mProgress window with the idea of preventing user interaction with the
+   // controls while the plot was being recalculated.  This doesn't appear to be necessary
+   // so just use the the top level window instead.
+   {
+      Maybe<wxWindowDisabler> blocker;
+      if (IsShown())
+         blocker.create(this);
+      wxYieldIfNeeded();
 
-   mAnalyst->Calculate(alg, windowFunc, mWindowSize, mRate,
-                       mData, mDataLen,
-                       &mYMin, &mYMax, mProgress);
-
-   delete blocker;
+      mAnalyst->Calculate(alg, windowFunc, mWindowSize, mRate,
+         mData, mDataLen,
+         &mYMin, &mYMax, mProgress);
+   }
    if (hadFocus) {
       hadFocus->SetFocus();
    }
@@ -1027,16 +1026,14 @@ void FreqWindow::OnExport(wxCommandEvent & WXUNUSED(event))
    wxString fName = _("spectrum.txt");
 
    fName = FileSelector(_("Export Spectral Data As:"),
-                        wxEmptyString, fName, wxT("txt"), wxT("*.txt"), wxFD_SAVE | wxRESIZE_BORDER, this);
+      wxEmptyString, fName, wxT("txt"), wxT("*.txt"), wxFD_SAVE | wxRESIZE_BORDER, this);
 
    if (fName == wxT(""))
       return;
 
    wxTextFile f(fName);
 #ifdef __WXMAC__
-   wxFile *temp = new wxFile();
-   temp->Create(fName);
-   delete temp;
+   wxFile{}.Create(fName);
 #else
    f.Create();
 #endif
@@ -1071,7 +1068,7 @@ void FreqWindow::OnExport(wxCommandEvent & WXUNUSED(event))
 
 void FreqWindow::OnReplot(wxCommandEvent & WXUNUSED(event))
 {
-   gPrefs->Read(wxT("/GUI/EnvdBRange"), &dBRange, ENV_DB_RANGE);
+   gPrefs->Read(ENV_DB_KEY, &dBRange, ENV_DB_RANGE);
    if(dBRange < 90.)
       dBRange = 90.;
    GetAudio();
@@ -1249,11 +1246,7 @@ bool SpectrumAnalyst::Calculate(Algorithm alg, int windowFunc,
          case EnhancedAutocorrelation:
 
             // Take FFT
-#ifdef EXPERIMENTAL_USE_REALFFTF
             RealFFT(mWindowSize, in, out, out2);
-#else
-            FFT(mWindowSize, false, in, NULL, out, out2);
-#endif
             // Compute power
             for (int i = 0; i < mWindowSize; i++)
                in[i] = (out[i] * out[i]) + (out2[i] * out2[i]);
@@ -1271,11 +1264,7 @@ bool SpectrumAnalyst::Calculate(Algorithm alg, int windowFunc,
                   in[i] = pow(in[i], 1.0f / 3.0f);
             }
             // Take FFT
-#ifdef EXPERIMENTAL_USE_REALFFTF
             RealFFT(mWindowSize, in, out, out2);
-#else
-            FFT(mWindowSize, false, in, NULL, out, out2);
-#endif
 
             // Take real part of result
             for (int i = 0; i < half; i++)
@@ -1283,12 +1272,7 @@ bool SpectrumAnalyst::Calculate(Algorithm alg, int windowFunc,
             break;
 
          case Cepstrum:
-#ifdef EXPERIMENTAL_USE_REALFFTF
             RealFFT(mWindowSize, in, out, out2);
-#else
-            FFT(mWindowSize, false, in, NULL, out, out2);
-#endif
-
             // Compute log power
             // Set a sane lower limit assuming maximum time amplitude of 1.0
             {
@@ -1303,11 +1287,7 @@ bool SpectrumAnalyst::Calculate(Algorithm alg, int windowFunc,
                      in[i] = log(power);
                }
                // Take IFFT
-#ifdef EXPERIMENTAL_USE_REALFFTF
                InverseRealFFT(mWindowSize, in, NULL, out);
-#else
-               FFT(mWindowSize, true, in, NULL, out, out2);
-#endif
 
                // Take real part of result
                for (int i = 0; i < half; i++)
@@ -1394,7 +1374,7 @@ bool SpectrumAnalyst::Calculate(Algorithm alg, int windowFunc,
          if (mProcessed[i] < 0.0)
             mProcessed[i] = float(0.0);
 
-      // Find new min/max
+      // Find NEW min/max
       mYMin = mProcessed[0];
       mYMax = mProcessed[0];
       for (int i = 1; i < half; i++)

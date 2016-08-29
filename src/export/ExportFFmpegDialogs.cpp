@@ -56,19 +56,16 @@
 
 #include "../FileFormats.h"
 #include "../Internat.h"
-#include "../LabelTrack.h"
 #include "../Mix.h"
 #include "../Prefs.h"
 #include "../Project.h"
 #include "../Tags.h"
-#include "../Track.h"
-#include "../WaveTrack.h"
 
 #include "Export.h"
 
 #if defined(USE_FFMPEG)
 
-extern FFmpegLibs *FFmpegLibsInst;
+extern FFmpegLibs *FFmpegLibsInst();
 
 /// This construction defines a enumeration of UI element IDs, and a static
 /// array of their string representations (this way they're always synchronized).
@@ -139,201 +136,199 @@ static const wxChar *FFmpegExportCtrlIDNames[] = {
 // ExportFFmpegAC3Options Class
 //----------------------------------------------------------------------------
 
-BEGIN_EVENT_TABLE(ExportFFmpegAC3Options, wxDialog)
-   EVT_BUTTON(wxID_OK,ExportFFmpegAC3Options::OnOK)
-END_EVENT_TABLE()
-
 // This initialises content for the static const member variables defined in
 // ExportFFmpegDialogs.h (note no static keyword - important!)
 const int ExportFFmpegAC3Options::iAC3BitRates[] = { 32000, 40000, 48000, 56000, 64000, 80000, 96000, 112000, 128000, 160000, 192000, 224000, 256000, 320000, 384000, 448000, 512000, 576000, 640000 };
 const int ExportFFmpegAC3Options::iAC3SampleRates[] = { 32000, 44100, 48000, 0 };
 
-ExportFFmpegAC3Options::ExportFFmpegAC3Options(wxWindow *parent)
-:  wxDialog(parent, wxID_ANY,
-            wxString(_("Specify AC3 Options")))
+ExportFFmpegAC3Options::ExportFFmpegAC3Options(wxWindow *parent, int WXUNUSED(format))
+:  wxPanelWrapper(parent, wxID_ANY)
 {
-   ShuttleGui S(this, eIsCreatingFromPrefs);
-
    for (unsigned int i=0; i < (sizeof(iAC3BitRates)/sizeof(int)); i++)
    {
       mBitRateNames.Add(wxString::Format(_("%i kbps"),iAC3BitRates[i]/1000));
       mBitRateLabels.Add(iAC3BitRates[i]);
    }
 
+   ShuttleGui S(this, eIsCreatingFromPrefs);
    PopulateOrExchange(S);
+
+   TransferDataToWindow();
+}
+
+ExportFFmpegAC3Options::~ExportFFmpegAC3Options()
+{
+   TransferDataFromWindow();
 }
 
 ///
 ///
 void ExportFFmpegAC3Options::PopulateOrExchange(ShuttleGui & S)
 {
-   S.StartHorizontalLay(wxEXPAND, 0);
+   S.StartVerticalLay();
    {
-      S.StartStatic(_("AC3 Export Setup"), 0);
+      S.StartHorizontalLay(wxCENTER);
       {
-         S.StartTwoColumn();
+         S.StartMultiColumn(2, wxCENTER);
          {
             S.TieChoice(_("Bit Rate:"), wxT("/FileFormats/AC3BitRate"),
                160000, mBitRateNames, mBitRateLabels);
          }
-         S.EndTwoColumn();
+         S.EndMultiColumn();
       }
-      S.EndStatic();
+      S.EndHorizontalLay();
    }
-   S.EndHorizontalLay();
-
-   S.AddStandardButtons();
-
-   Layout();
-   Fit();
-   SetMinSize(GetSize());
-   Center();
-
-   return;
+   S.EndVerticalLay();
 }
 
 ///
 ///
-void ExportFFmpegAC3Options::OnOK(wxCommandEvent& WXUNUSED(event))
+bool ExportFFmpegAC3Options::TransferDataToWindow()
+{
+   return true;
+}
+
+///
+///
+bool ExportFFmpegAC3Options::TransferDataFromWindow()
 {
    ShuttleGui S(this, eIsSavingToPrefs);
    PopulateOrExchange(S);
 
-   EndModal(wxID_OK);
+   gPrefs->Flush();
 
-   return;
+   return true;
 }
 
 //----------------------------------------------------------------------------
 // ExportFFmpegAACOptions Class
 //----------------------------------------------------------------------------
 
-BEGIN_EVENT_TABLE(ExportFFmpegAACOptions, wxDialog)
-   EVT_BUTTON(wxID_OK,ExportFFmpegAACOptions::OnOK)
-END_EVENT_TABLE()
-
-ExportFFmpegAACOptions::ExportFFmpegAACOptions(wxWindow *parent)
-:  wxDialog(parent, wxID_ANY,
-            wxString(_("Specify AAC Options")))
+ExportFFmpegAACOptions::ExportFFmpegAACOptions(wxWindow *parent, int WXUNUSED(format))
+:  wxPanelWrapper(parent, wxID_ANY)
 {
    ShuttleGui S(this, eIsCreatingFromPrefs);
-
    PopulateOrExchange(S);
+
+   TransferDataToWindow();
+}
+
+ExportFFmpegAACOptions::~ExportFFmpegAACOptions()
+{
+   TransferDataFromWindow();
 }
 
 ///
 ///
 void ExportFFmpegAACOptions::PopulateOrExchange(ShuttleGui & S)
 {
-   S.StartStatic(_("AAC Export Setup"), 1);
+   S.StartVerticalLay();
    {
-      S.StartMultiColumn(2, wxEXPAND);
+      S.StartHorizontalLay(wxEXPAND);
       {
-         S.SetStretchyCol(1);
-         S.TieSlider(_("Quality:"),wxT("/FileFormats/AACQuality"),100,500,10);
+         S.SetSizerProportion(1);
+         S.StartMultiColumn(2, wxCENTER);
+         {
+            S.SetStretchyCol(1);
+            S.Prop(1).TieSlider(_("Quality:"),wxT("/FileFormats/AACQuality"),100,500,10);
+         }
+         S.EndMultiColumn();
       }
-      S.EndMultiColumn();
+      S.EndHorizontalLay();
    }
-   S.EndStatic();
-   S.AddStandardButtons();
-
-   Layout();
-   Fit();
-   SetMinSize(GetSize());
-   Center();
-
-   return;
+   S.EndVerticalLay();
 }
 
 ///
 ///
-void ExportFFmpegAACOptions::OnOK(wxCommandEvent& WXUNUSED(event))
+bool ExportFFmpegAACOptions::TransferDataToWindow()
+{
+   return true;
+}
+
+///
+///
+bool ExportFFmpegAACOptions::TransferDataFromWindow()
 {
    ShuttleGui S(this, eIsSavingToPrefs);
    PopulateOrExchange(S);
 
-   EndModal(wxID_OK);
+   gPrefs->Flush();
 
-   return;
+   return true;
 }
-
 
 //----------------------------------------------------------------------------
 // ExportFFmpegAMRNBOptions Class
 //----------------------------------------------------------------------------
-
-BEGIN_EVENT_TABLE(ExportFFmpegAMRNBOptions, wxDialog)
-   EVT_BUTTON(wxID_OK,ExportFFmpegAMRNBOptions::OnOK)
-END_EVENT_TABLE()
 
 /// Bit Rates supported by libAMR-NB encoder
 /// Sample Rate is always 8 kHz
 int ExportFFmpegAMRNBOptions::iAMRNBBitRate[] =
 { 4750, 5150, 5900, 6700, 7400, 7950, 10200, 12200 };
 
-ExportFFmpegAMRNBOptions::ExportFFmpegAMRNBOptions(wxWindow *parent)
-:  wxDialog(parent, wxID_ANY,
-            wxString(_("Specify AMR-NB Options")))
+ExportFFmpegAMRNBOptions::ExportFFmpegAMRNBOptions(wxWindow *parent, int WXUNUSED(format))
+:  wxPanelWrapper(parent, wxID_ANY)
 {
-   ShuttleGui S(this, eIsCreatingFromPrefs);
-
    for (unsigned int i=0; i < (sizeof(iAMRNBBitRate)/sizeof(int)); i++)
    {
       mBitRateNames.Add(wxString::Format(_("%.2f kbps"),(float)iAMRNBBitRate[i]/1000));
       mBitRateLabels.Add(iAMRNBBitRate[i]);
    }
 
+   ShuttleGui S(this, eIsCreatingFromPrefs);
    PopulateOrExchange(S);
+
+   TransferDataToWindow();
+}
+
+ExportFFmpegAMRNBOptions::~ExportFFmpegAMRNBOptions()
+{
+   TransferDataFromWindow();
 }
 
 ///
 ///
 void ExportFFmpegAMRNBOptions::PopulateOrExchange(ShuttleGui & S)
 {
-   S.StartHorizontalLay(wxEXPAND, 0);
+   S.StartVerticalLay();
    {
-      S.StartStatic(_("AMR-NB Export Setup"), 0);
+      S.StartHorizontalLay(wxCENTER);
       {
-         S.StartTwoColumn();
+         S.StartMultiColumn(2, wxCENTER);
          {
             S.TieChoice(_("Bit Rate:"), wxT("/FileFormats/AMRNBBitRate"),
                12200, mBitRateNames, mBitRateLabels);
          }
-         S.EndTwoColumn();
+         S.EndMultiColumn();
       }
-      S.EndStatic();
+      S.EndHorizontalLay();
    }
-   S.EndHorizontalLay();
-
-   S.AddStandardButtons();
-
-   Layout();
-   Fit();
-   SetMinSize(GetSize());
-   Center();
-
-   return;
+   S.EndVerticalLay();
 }
 
 ///
 ///
-void ExportFFmpegAMRNBOptions::OnOK(wxCommandEvent& WXUNUSED(event))
+bool ExportFFmpegAMRNBOptions::TransferDataToWindow()
+{
+   return true;
+}
+
+///
+///
+bool ExportFFmpegAMRNBOptions::TransferDataFromWindow()
 {
    ShuttleGui S(this, eIsSavingToPrefs);
    PopulateOrExchange(S);
 
-   EndModal(wxID_OK);
+   gPrefs->Flush();
 
-   return;
+   return true;
 }
 
 //----------------------------------------------------------------------------
 // ExportFFmpegWMAOptions Class
 //----------------------------------------------------------------------------
-
-BEGIN_EVENT_TABLE(ExportFFmpegWMAOptions, wxDialog)
-   EVT_BUTTON(wxID_OK,ExportFFmpegWMAOptions::OnOK)
-END_EVENT_TABLE()
 
 const int ExportFFmpegWMAOptions::iWMASampleRates[] =
 { 8000, 11025, 16000, 22050, 44100, 0};
@@ -342,83 +337,153 @@ const int ExportFFmpegWMAOptions::iWMASampleRates[] =
 const int ExportFFmpegWMAOptions::iWMABitRate[] =
 { 24000, 32000, 40000, 48000, 64000, 80000, 96000, 128000, 160000, 192000, 256000, 320000 };
 
-
-ExportFFmpegWMAOptions::ExportFFmpegWMAOptions(wxWindow *parent)
-:  wxDialog(parent, wxID_ANY,
-            wxString(_("Specify WMA Options")))
+ExportFFmpegWMAOptions::ExportFFmpegWMAOptions(wxWindow *parent, int WXUNUSED(format))
+:  wxPanelWrapper(parent, wxID_ANY)
 {
-   ShuttleGui S(this, eIsCreatingFromPrefs);
-
    for (unsigned int i=0; i < (sizeof(iWMABitRate)/sizeof(int)); i++)
    {
       mBitRateNames.Add(wxString::Format(wxT("%i kbps"),iWMABitRate[i]/1000));
       mBitRateLabels.Add(iWMABitRate[i]);
    }
 
+   ShuttleGui S(this, eIsCreatingFromPrefs);
    PopulateOrExchange(S);
+
+   TransferDataToWindow();
+}
+
+ExportFFmpegWMAOptions::~ExportFFmpegWMAOptions()
+{
+   TransferDataFromWindow();
 }
 
 ///
 ///
 void ExportFFmpegWMAOptions::PopulateOrExchange(ShuttleGui & S)
 {
-   S.StartHorizontalLay(wxEXPAND, 0);
+   S.StartVerticalLay();
    {
-      S.StartStatic(_("WMA Export Setup"), 0);
+      S.StartHorizontalLay(wxCENTER);
       {
-         S.StartTwoColumn();
+         S.StartMultiColumn(2, wxCENTER);
          {
             S.TieChoice(_("Bit Rate:"), wxT("/FileFormats/WMABitRate"),
-               96000, mBitRateNames, mBitRateLabels);
+               128000, mBitRateNames, mBitRateLabels);
          }
-         S.EndTwoColumn();
+         S.EndMultiColumn();
       }
-      S.EndStatic();
+      S.EndHorizontalLay();
    }
-   S.EndHorizontalLay();
-
-   S.AddStandardButtons();
-
-   Layout();
-   Fit();
-   SetMinSize(GetSize());
-   Center();
-
-   return;
+   S.EndVerticalLay();
 }
 
 ///
 ///
-void ExportFFmpegWMAOptions::OnOK(wxCommandEvent& WXUNUSED(event))
+bool ExportFFmpegWMAOptions::TransferDataToWindow()
+{
+   return true;
+}
+
+///
+///
+bool ExportFFmpegWMAOptions::TransferDataFromWindow()
 {
    ShuttleGui S(this, eIsSavingToPrefs);
    PopulateOrExchange(S);
 
-   EndModal(wxID_OK);
+   gPrefs->Flush();
 
-   return;
+   return true;
 }
 
-FFmpegPreset::FFmpegPreset(wxString &name)
+//----------------------------------------------------------------------------
+// ExportFFmpegCustomOptions Class
+//----------------------------------------------------------------------------
+
+#define OpenID 9000
+
+BEGIN_EVENT_TABLE(ExportFFmpegCustomOptions, wxPanelWrapper)
+   EVT_BUTTON(OpenID, ExportFFmpegCustomOptions::OnOpen)
+END_EVENT_TABLE()
+
+ExportFFmpegCustomOptions::ExportFFmpegCustomOptions(wxWindow *parent, int WXUNUSED(format))
+:  wxPanelWrapper(parent, wxID_ANY)
 {
-   mPresetName = new wxString(name);
-   mControlState = new wxArrayString();
-   mControlState->SetCount(FELastID - FEFirstID);
+   ShuttleGui S(this, eIsCreatingFromPrefs);
+   PopulateOrExchange(S);
+
+   TransferDataToWindow();
+}
+
+ExportFFmpegCustomOptions::~ExportFFmpegCustomOptions()
+{
+   TransferDataFromWindow();
+}
+
+///
+///
+void ExportFFmpegCustomOptions::PopulateOrExchange(ShuttleGui & S)
+{
+   S.StartHorizontalLay(wxCENTER);
+   {
+      S.StartHorizontalLay(wxCENTER, 0);
+      {
+         S.Id(OpenID).AddButton(_("Open custom FFmpeg format options"));
+      }
+      S.EndHorizontalLay();
+   }
+   S.EndHorizontalLay();
+}
+
+///
+///
+bool ExportFFmpegCustomOptions::TransferDataToWindow()
+{
+   return true;
+}
+
+///
+///
+bool ExportFFmpegCustomOptions::TransferDataFromWindow()
+{
+   return true;
+}
+
+///
+///
+void ExportFFmpegCustomOptions::OnOpen(wxCommandEvent & WXUNUSED(evt))
+{
+   // Show "Locate FFmpeg" dialog
+   PickFFmpegLibs();
+   if (!FFmpegLibsInst()->ValidLibsLoaded())
+   {
+      FFmpegLibsInst()->FindLibs(NULL);
+      FFmpegLibsInst()->FreeLibs();
+      if (!LoadFFmpeg(true))
+      {
+         return;
+      }
+   }
+   DropFFmpegLibs();
+
+   ExportFFmpegOptions od(wxGetTopLevelParent(this));
+   od.ShowModal();
+}
+
+FFmpegPreset::FFmpegPreset()
+{
+   mControlState.SetCount(FELastID - FEFirstID);
 }
 
 FFmpegPreset::~FFmpegPreset()
 {
-   delete mPresetName;
-   delete mControlState;
 }
-
-WX_DEFINE_LIST(FFmpegPresetList);
-
 
 FFmpegPresets::FFmpegPresets()
 {
-   mPresets = new FFmpegPresetList();
-   mPresets->DeleteContents(true);
+   mPreset = NULL;
+   mAbortImport = false;
+
    XMLFileReader xmlfile;
    wxFileName xmlFileName(FileNames::DataDir(), wxT("ffmpeg_presets.xml"));
    xmlfile.Parse(this,xmlFileName.GetFullPath());
@@ -427,70 +492,72 @@ FFmpegPresets::FFmpegPresets()
 FFmpegPresets::~FFmpegPresets()
 {
    XMLFileWriter writer;
-   // FIXME: Catch XMLFileWriterException
+   // FIXME: TRAP_ERR Catch XMLFileWriterException
    wxFileName xmlFileName(FileNames::DataDir(), wxT("ffmpeg_presets.xml"));
    writer.Open(xmlFileName.GetFullPath(),wxT("wb"));
    WriteXMLHeader(writer);
    WriteXML(writer);
-   delete mPresets;
 }
 
 void FFmpegPresets::ImportPresets(wxString &filename)
 {
+   mPreset = NULL;
+   mAbortImport = false;
+
+   FFmpegPresetMap savePresets = mPresets;
+
    XMLFileReader xmlfile;
-   xmlfile.Parse(this,filename);
+   bool success = xmlfile.Parse(this,filename);
+   if (!success || mAbortImport) {
+      mPresets = savePresets;
+   }
 }
 
 void FFmpegPresets::ExportPresets(wxString &filename)
 {
    XMLFileWriter writer;
-   // FIXME: Catch XMLFileWriterException
+   // FIXME: TRAP_ERR Catch XMLFileWriterException
    writer.Open(filename,wxT("wb"));
    WriteXMLHeader(writer);
    WriteXML(writer);
 }
 
-wxArrayString *FFmpegPresets::GetPresetList()
+void FFmpegPresets::GetPresetList(wxArrayString &list)
 {
-   wxArrayString *list = new wxArrayString();
-   FFmpegPresetList::iterator iter;
-   for (iter = mPresets->begin(); iter != mPresets->end(); ++iter)
+   list.Clear();
+   FFmpegPresetMap::iterator iter;
+   for (iter = mPresets.begin(); iter != mPresets.end(); ++iter)
    {
-      FFmpegPreset *preset = *iter;
-      list->Add(*preset->mPresetName);
+      list.Add(iter->second.mPresetName);
    }
-   return list;
+
+   list.Sort();
 }
 
 void FFmpegPresets::DeletePreset(wxString &name)
 {
-   FFmpegPresetList::iterator iter;
-   for (iter = mPresets->begin(); iter != mPresets->end(); ++iter)
+   FFmpegPresetMap::iterator iter = mPresets.find(name);
+   if (iter != mPresets.end())
    {
-      FFmpegPreset *preset = *iter;
-      if (!preset->mPresetName->CmpNoCase(name))
-      {
-         mPresets->erase(iter);
-         break;
-      }
+      mPresets.erase(iter);
    }
 }
 
 FFmpegPreset *FFmpegPresets::FindPreset(wxString &name)
 {
-   FFmpegPreset *preset = NULL;
-   FFmpegPresetList::iterator iter;
-   for (iter = mPresets->begin(); iter != mPresets->end(); ++iter)
+   FFmpegPresetMap::iterator iter = mPresets.find(name);
+   if (iter != mPresets.end())
    {
-      FFmpegPreset *current = *iter;
-      if (!current->mPresetName->CmpNoCase(name))
-         preset = current;
+      return &iter->second;
    }
-   return preset;
+
+   return NULL;
 }
 
 void FFmpegPresets::SavePreset(ExportFFmpegOptions *parent, wxString &name)
 {
+   wxString format;
+   wxString codec;
    FFmpegPreset *preset = FindPreset(name);
    if (preset)
    {
@@ -498,29 +565,30 @@ void FFmpegPresets::SavePreset(ExportFFmpegOptions *parent, wxString &name)
       int action = wxMessageBox(query,_("Confirm Overwrite"),wxYES_NO | wxCENTRE);
       if (action == wxNO) return;
    }
-   else
+
+   wxWindow *wnd;
+   wxListBox *lb;
+
+   wnd = dynamic_cast<wxWindow*>(parent)->FindWindowById(FEFormatID,parent);
+   lb = dynamic_cast<wxListBox*>(wnd);
+   if (lb->GetSelection() < 0)
    {
-      wxWindow *wnd;
-      wxListBox *lb;
-
-      wnd = dynamic_cast<wxWindow*>(parent)->FindWindowById(FEFormatID,parent);
-      lb = dynamic_cast<wxListBox*>(wnd);
-      if (lb->GetSelection() < 0)
-      {
-         wxMessageBox(_("Please select format before saving a profile"));
-         return;
-      }
-
-      wnd = dynamic_cast<wxWindow*>(parent)->FindWindowById(FECodecID,parent);
-      lb = dynamic_cast<wxListBox*>(wnd);
-      if (lb->GetSelection() < 0)
-      {
-         wxMessageBox(_("Please select codec before saving a profile"));
-         return;
-      }
-      preset = new FFmpegPreset(name);
-      mPresets->push_front(preset);
+      wxMessageBox(_("Please select format before saving a profile"));
+      return;
    }
+   format = lb->GetStringSelection();
+
+   wnd = dynamic_cast<wxWindow*>(parent)->FindWindowById(FECodecID,parent);
+   lb = dynamic_cast<wxListBox*>(wnd);
+   if (lb->GetSelection() < 0)
+   {
+      wxMessageBox(_("Please select codec before saving a profile"));
+      return;
+   }
+   codec = lb->GetStringSelection();
+
+   preset = &mPresets[name];
+   preset->mPresetName = name;
 
    wxSpinCtrl *sc;
    wxTextCtrl *tc;
@@ -535,8 +603,10 @@ void FFmpegPresets::SavePreset(ExportFFmpegOptions *parent, wxString &name)
          switch(id)
          {
          case FEFormatID:
+            preset->mControlState.Item(id - FEFirstID) = format;
             break;
          case FECodecID:
+            preset->mControlState.Item(id - FEFirstID) = codec;
             break;
          // Spin control
          case FEBitrateID:
@@ -554,26 +624,26 @@ void FFmpegPresets::SavePreset(ExportFFmpegOptions *parent, wxString &name)
          case FEMuxRateID:
          case FEPacketSizeID:
             sc = dynamic_cast<wxSpinCtrl*>(wnd);
-            preset->mControlState->Item(id - FEFirstID) = wxString::Format(wxT("%d"),sc->GetValue());
+            preset->mControlState.Item(id - FEFirstID) = wxString::Format(wxT("%d"),sc->GetValue());
             break;
          // Text control
          case FELanguageID:
          case FETagID:
             tc = dynamic_cast<wxTextCtrl*>(wnd);
-            preset->mControlState->Item(id - FEFirstID) = tc->GetValue();
+            preset->mControlState.Item(id - FEFirstID) = tc->GetValue();
             break;
          // Choice
          case FEProfileID:
          case FEPredOrderID:
             ch = dynamic_cast<wxChoice*>(wnd);
-            preset->mControlState->Item(id - FEFirstID) = wxString::Format(wxT("%d"),ch->GetSelection());
+            preset->mControlState.Item(id - FEFirstID) = wxString::Format(wxT("%d"),ch->GetSelection());
             break;
          // Check box
          case FEUseLPCID:
          case FEBitReservoirID:
          case FEVariableBlockLenID:
             cb = dynamic_cast<wxCheckBox*>(wnd);
-            preset->mControlState->Item(id - FEFirstID) = wxString::Format(wxT("%d"),cb->GetValue());
+            preset->mControlState.Item(id - FEFirstID) = wxString::Format(wxT("%d"),cb->GetValue());
             break;
          }
       }
@@ -609,7 +679,7 @@ void FFmpegPresets::LoadPreset(ExportFFmpegOptions *parent, wxString &name)
          case FEFormatID:
          case FECodecID:
             lb = dynamic_cast<wxListBox*>(wnd);
-            readstr = preset->mControlState->Item(id - FEFirstID);
+            readstr = preset->mControlState.Item(id - FEFirstID);
             readlong = lb->FindString(readstr);
             if (readlong > -1) lb->Select(readlong);
             break;
@@ -629,20 +699,20 @@ void FFmpegPresets::LoadPreset(ExportFFmpegOptions *parent, wxString &name)
          case FEMuxRateID:
          case FEPacketSizeID:
             sc = dynamic_cast<wxSpinCtrl*>(wnd);
-            preset->mControlState->Item(id - FEFirstID).ToLong(&readlong);
+            preset->mControlState.Item(id - FEFirstID).ToLong(&readlong);
             sc->SetValue(readlong);
             break;
          // Text control
          case FELanguageID:
          case FETagID:
             tc = dynamic_cast<wxTextCtrl*>(wnd);
-            tc->SetValue(preset->mControlState->Item(id - FEFirstID));
+            tc->SetValue(preset->mControlState.Item(id - FEFirstID));
             break;
          // Choice
          case FEProfileID:
          case FEPredOrderID:
             ch = dynamic_cast<wxChoice*>(wnd);
-            preset->mControlState->Item(id - FEFirstID).ToLong(&readlong);
+            preset->mControlState.Item(id - FEFirstID).ToLong(&readlong);
             if (readlong > -1) ch->Select(readlong);
             break;
          // Check box
@@ -650,7 +720,7 @@ void FFmpegPresets::LoadPreset(ExportFFmpegOptions *parent, wxString &name)
          case FEBitReservoirID:
          case FEVariableBlockLenID:
             cb = dynamic_cast<wxCheckBox*>(wnd);
-            preset->mControlState->Item(id - FEFirstID).ToLong(&readlong);
+            preset->mControlState.Item(id - FEFirstID).ToLong(&readlong);
             if (readlong) readbool = true; else readbool = false;
             cb->SetValue(readbool);
             break;
@@ -661,11 +731,17 @@ void FFmpegPresets::LoadPreset(ExportFFmpegOptions *parent, wxString &name)
 
 bool FFmpegPresets::HandleXMLTag(const wxChar *tag, const wxChar **attrs)
 {
+   if (mAbortImport)
+   {
+      return false;
+   }
+
    if (!wxStrcmp(tag,wxT("ffmpeg_presets")))
    {
       return true;
    }
-   else if (!wxStrcmp(tag,wxT("preset")))
+
+   if (!wxStrcmp(tag,wxT("preset")))
    {
       while (*attrs)
       {
@@ -677,23 +753,36 @@ bool FFmpegPresets::HandleXMLTag(const wxChar *tag, const wxChar **attrs)
 
          if (!wxStrcmp(attr,wxT("name")))
          {
-            FFmpegPreset *newpreset = FindPreset(value);
-            if (!newpreset)
-               mPresets->push_front(new FFmpegPreset(value));
+            mPreset = FindPreset(value);
+            if (mPreset)
+            {
+               wxString query = wxString::Format(_("Replace preset '%s'?"), value.c_str());
+               int action = wxMessageBox(query, _("Confirm Overwrite"), wxYES_NO | wxCANCEL | wxCENTRE);
+               if (action == wxCANCEL)
+               {
+                  mAbortImport = true;
+                  return false;
+               }
+               if (action == wxNO)
+               {
+                  mPreset = NULL;
+                  return false;
+               }
+               *mPreset = FFmpegPreset();
+            }
             else
             {
-               mPresets->remove(newpreset);
-               mPresets->push_front(newpreset);
+               mPreset = &mPresets[value];
             }
+            mPreset->mPresetName = value;
          }
       }
       return true;
    }
-   else if (!wxStrcmp(tag,wxT("setctrlstate")))
+
+   if (!wxStrcmp(tag,wxT("setctrlstate")) && mPreset)
    {
-      FFmpegPreset *preset = mPresets->front();
       long id = -1;
-      if (!preset) return false;
       while (*attrs)
       {
          const wxChar *attr = *attrs++;
@@ -711,16 +800,22 @@ bool FFmpegPresets::HandleXMLTag(const wxChar *tag, const wxChar **attrs)
          else if (!wxStrcmp(attr,wxT("state")))
          {
             if (id > FEFirstID && id < FELastID)
-               preset->mControlState->Item(id - FEFirstID) = wxString(value);
+               mPreset->mControlState.Item(id - FEFirstID) = wxString(value);
          }
       }
       return true;
    }
+
    return false;
 }
 
 XMLTagHandler *FFmpegPresets::HandleXMLChild(const wxChar *tag)
 {
+   if (mAbortImport)
+   {
+      return NULL;
+   }
+
    if (!wxStrcmp(tag, wxT("preset")))
    {
       return this;
@@ -755,17 +850,17 @@ void FFmpegPresets::WriteXML(XMLWriter &xmlFile)
 {
    xmlFile.StartTag(wxT("ffmpeg_presets"));
    xmlFile.WriteAttr(wxT("version"),wxT("1.0"));
-   FFmpegPresetList::iterator iter;
-   for (iter = mPresets->begin(); iter != mPresets->end(); ++iter)
+   FFmpegPresetMap::iterator iter;
+   for (iter = mPresets.begin(); iter != mPresets.end(); ++iter)
    {
-      FFmpegPreset *preset = *iter;
+      FFmpegPreset *preset = &iter->second;
       xmlFile.StartTag(wxT("preset"));
-      xmlFile.WriteAttr(wxT("name"),*preset->mPresetName);
+      xmlFile.WriteAttr(wxT("name"),preset->mPresetName);
       for (long i = FEFirstID + 1; i < FELastID; i++)
       {
          xmlFile.StartTag(wxT("setctrlstate"));
          xmlFile.WriteAttr(wxT("id"),wxString(FFmpegExportCtrlIDNames[i - FEFirstID]));
-         xmlFile.WriteAttr(wxT("state"),preset->mControlState->Item(i - FEFirstID));
+         xmlFile.WriteAttr(wxT("state"),preset->mControlState.Item(i - FEFirstID));
          xmlFile.EndTag(wxT("setctrlstate"));
       }
       xmlFile.EndTag(wxT("preset"));
@@ -777,7 +872,7 @@ void FFmpegPresets::WriteXML(XMLWriter &xmlFile)
 // ExportFFmpegOptions Class
 //----------------------------------------------------------------------------
 
-BEGIN_EVENT_TABLE(ExportFFmpegOptions, wxDialog)
+BEGIN_EVENT_TABLE(ExportFFmpegOptions, wxDialogWrapper)
    EVT_BUTTON(wxID_OK,ExportFFmpegOptions::OnOK)
    EVT_LISTBOX(FEFormatID,ExportFFmpegOptions::OnFormatList)
    EVT_LISTBOX(FECodecID,ExportFFmpegOptions::OnCodecList)
@@ -1200,23 +1295,22 @@ const wxChar *ExportFFmpegOptions::PredictionOrderMethodNames[] = { _("Estimate"
 
 ExportFFmpegOptions::~ExportFFmpegOptions()
 {
-   delete mPresets;
-   delete mPresetNames;
    DropFFmpegLibs();
 }
 
 ExportFFmpegOptions::ExportFFmpegOptions(wxWindow *parent)
-:  wxDialog(parent, wxID_ANY,
-            wxString(_("Specify Other Options")))
+:  wxDialogWrapper(parent, wxID_ANY,
+            wxString(_("Configure custom FFmpeg options")))
 {
+   SetName(GetTitle());
    ShuttleGui S(this, eIsCreatingFromPrefs);
    PickFFmpegLibs();
-   //FFmpegLibsInst->LoadLibs(NULL,true); //Loaded at startup or from Prefs now
+   //FFmpegLibsInst()->LoadLibs(NULL,true); //Loaded at startup or from Prefs now
 
-   mPresets = new FFmpegPresets();
-   mPresetNames = mPresets->GetPresetList();
+   mPresets = std::make_unique<FFmpegPresets>();
+   mPresets->GetPresetList(mPresetNames);
 
-   if (FFmpegLibsInst->ValidLibsLoaded())
+   if (FFmpegLibsInst()->ValidLibsLoaded())
    {
       FetchFormatList();
       FetchCodecList();
@@ -1299,7 +1393,7 @@ void ExportFFmpegOptions::PopulateOrExchange(ShuttleGui & S)
       S.StartMultiColumn(7, wxEXPAND);
       {
          S.SetStretchyCol(1);
-         mPresetCombo = S.Id(FEPresetID).AddCombo(_("Preset:"), gPrefs->Read(wxT("/FileFormats/FFmpegPreset"),wxEmptyString), mPresetNames);
+         mPresetCombo = S.Id(FEPresetID).AddCombo(_("Preset:"), gPrefs->Read(wxT("/FileFormats/FFmpegPreset"),wxEmptyString), &mPresetNames);
          mLoadPreset = S.Id(FELoadPresetID).AddButton(_("Load Preset"));
          mSavePreset = S.Id(FESavePresetID).AddButton(_("Save Preset"));
          mDeletePreset = S.Id(FEDeletePresetID).AddButton(_("Delete Preset"));
@@ -1523,7 +1617,7 @@ int ExportFFmpegOptions::FetchCompatibleCodecList(const wxChar *fmt, AVCodecID i
          // If it exists, is audio and has encoder
          if (codec != NULL && (codec->type == AVMEDIA_TYPE_AUDIO) && av_codec_is_encoder(codec))
          {
-            // If it was selected - remember it's new index
+            // If it was selected - remember it's NEW index
             if ((id >= 0) && codec->id == id) index = mShownCodecNames.GetCount();
             mShownCodecNames.Add(wxString::FromUTF8(codec->name));
             mShownCodecLongNames.Add(wxString::Format(wxT("%s - %s"),mShownCodecNames.Last().c_str(),wxString::FromUTF8(codec->long_name).c_str()));
@@ -1548,7 +1642,7 @@ int ExportFFmpegOptions::FetchCompatibleCodecList(const wxChar *fmt, AVCodecID i
       }
    }
    // Format is not found - find format in libavformat and add it's default audio codec
-   // This allows us to provide limited support for new formats without modifying the compatibility list
+   // This allows us to provide limited support for NEW formats without modifying the compatibility list
    else if (found == 0)
    {
       wxCharBuffer buf = str.ToUTF8();
@@ -1564,7 +1658,7 @@ int ExportFFmpegOptions::FetchCompatibleCodecList(const wxChar *fmt, AVCodecID i
          }
       }
    }
-   // Show new codec list
+   // Show NEW codec list
    mCodecList->Append(mShownCodecNames);
 
    return index;
@@ -1656,7 +1750,7 @@ void ExportFFmpegOptions::OnDeletePreset(wxCommandEvent& WXUNUSED(event))
    long index = preset->FindString(presetname);
    preset->SetValue(wxEmptyString);
    preset->Delete(index);
-   mPresetNames->Remove(presetname);
+   mPresetNames.Remove(presetname);
 }
 
 ///
@@ -1671,13 +1765,13 @@ void ExportFFmpegOptions::OnSavePreset(wxCommandEvent& WXUNUSED(event))
       return;
    }
    mPresets->SavePreset(this,name);
-   int index = mPresetNames->Index(name.c_str(),false);
+   int index = mPresetNames.Index(name.c_str(),false);
    if (index == -1)
    {
-      mPresetNames->Add(name);
+      mPresetNames.Add(name);
       mPresetCombo->Clear();
-      mPresetCombo->Append(*mPresetNames);
-      mPresetCombo->Select(mPresetNames->Index(name,false));
+      mPresetCombo->Append(mPresetNames);
+      mPresetCombo->Select(mPresetNames.Index(name,false));
    }
 }
 
@@ -1699,6 +1793,9 @@ void ExportFFmpegOptions::OnLoadPreset(wxCommandEvent& WXUNUSED(event))
    mCodecList->Append(mCodecNames);
 
    mPresets->LoadPreset(this,presetname);
+
+   DoOnFormatList();
+   DoOnCodecList();
 }
 
 ///
@@ -1715,10 +1812,9 @@ void ExportFFmpegOptions::OnImportPresets(wxCommandEvent& WXUNUSED(event))
    if (dlg.ShowModal() == wxID_CANCEL) return;
    path = dlg.GetPath();
    mPresets->ImportPresets(path);
-   delete mPresetNames;
-   mPresetNames = mPresets->GetPresetList();
+   mPresets->GetPresetList(mPresetNames);
    mPresetCombo->Clear();
-   mPresetCombo->Append(*mPresetNames);
+   mPresetCombo->Append(mPresetNames);
 }
 
 ///
@@ -1889,8 +1985,11 @@ void ExportFFmpegOptions::OnOK(wxCommandEvent& WXUNUSED(event))
    if (selcdc > -1) gPrefs->Write(wxT("/FileFormats/FFmpegCodec"),mCodecList->GetString(selcdc));
    if (selfmt > -1) gPrefs->Write(wxT("/FileFormats/FFmpegFormat"),mFormatList->GetString(selfmt));
    gPrefs->Flush();
+
    ShuttleGui S(this, eIsSavingToPrefs);
    PopulateOrExchange(S);
+
+   gPrefs->Flush();
 
    EndModal(wxID_OK);
 

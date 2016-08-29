@@ -46,7 +46,9 @@ BEGIN_EVENT_TABLE(AButton, wxWindow)
    EVT_ERASE_BACKGROUND(AButton::OnErase)
 END_EVENT_TABLE()
 
-class AButton::Listener
+// LL:  An alternative to this might be to just use the wxEVT_KILL_FOCUS
+//      or wxEVT_ACTIVATE events.
+class AButton::Listener final
    : public wxEvtHandler
 {
 public:
@@ -185,6 +187,8 @@ AButton::AButton(wxWindow * parent,
 
 AButton::~AButton()
 {
+   if(HasCapture())
+      ReleaseMouse();
 }
 
 void AButton::Init(wxWindow * parent,
@@ -229,13 +233,22 @@ void AButton::Init(wxWindow * parent,
 
 #if wxUSE_ACCESSIBILITY
    SetName( wxT("") );
-   SetAccessible(new AButtonAx(this));
+   SetAccessible(safenew AButtonAx(this));
 #endif
 }
 
 void AButton::UseDisabledAsDownHiliteImage(bool flag)
 {
    mUseDisabledAsDownHiliteImage = flag;
+}
+
+// This compensates for a but in wxWidgets 3.0.2 for mac:
+// Couldn't set focus from keyboard when AcceptsFocus returns false;
+// this bypasses that limitation
+void AButton::SetFocusFromKbd()
+{
+   auto temp = TemporarilyAllowFocus();
+   SetFocus();
 }
 
 void AButton::SetAlternateImages(unsigned idx,
@@ -278,8 +291,8 @@ void AButton::SetAlternateIdx(unsigned idx)
 
 void AButton::FollowModifierKeys()
 {
-   if(!mListener.get())
-      mListener.reset(new Listener(this));
+   if(!mListener)
+      mListener = std::make_unique<Listener>(this);
 }
 
 void AButton::SetFocusRect(wxRect & r)
@@ -339,12 +352,10 @@ void AButton::OnPaint(wxPaintEvent & WXUNUSED(event))
 
    mImages[mAlternateIdx].mArr[buttonState].Draw(dc, GetClientRect());
 
-#if defined(__WXMSW__) || defined(__WXGTK__)
    if( mButtonIsFocused )
    {
       AColor::DrawFocus( dc, mFocusRect );
    }
-#endif
 }
 
 void AButton::OnErase(wxEraseEvent & WXUNUSED(event))
@@ -360,6 +371,8 @@ void AButton::OnSize(wxSizeEvent & WXUNUSED(event))
    }
    Refresh(false);
 }
+
+bool AButton::s_AcceptsFocus{ false };
 
 bool AButton::HasAlternateImages(unsigned idx)
 {
@@ -379,8 +392,14 @@ void AButton::OnMouseEvent(wxMouseEvent & event)
    wxSize clientSize = GetClientSize();
    AButtonState prevState = GetState();
 
-   if (event.Entering())
+   if (event.Entering()) {
+      // Bug 1201:  On Mac, unsetting and re-setting the tooltip may be needed
+      // to make it pop up when we want it.
+      auto text = GetToolTipText();
+      UnsetToolTip();
+      SetToolTip(text);
       mCursorIsInWindow = true;
+   }
    else if (event.Leaving())
       mCursorIsInWindow = false;
    else
@@ -388,22 +407,13 @@ void AButton::OnMouseEvent(wxMouseEvent & event)
          (event.m_x >= 0 && event.m_y >= 0 &&
           event.m_x < clientSize.x && event.m_y < clientSize.y);
 
-   if (!mButtonIsDown)
-   {
-      // Note that CMD (or CTRL) takes precedence over Shift if both are down
-      // see also AButton::Listener::OnKeyUp()
-      if (event.CmdDown() && HasAlternateImages(2))
-         mAlternateIdx = 2;
-      else if (event.ShiftDown() && HasAlternateImages(1))
-         mAlternateIdx = 1;
-      else
-         mAlternateIdx = 0;
-   }
-
    if (mEnabled && event.IsButton()) {
       if (event.ButtonIsDown(wxMOUSE_BTN_ANY)) {
          mIsClicking = true;
-         CaptureMouse();
+         if (event.ButtonDClick())
+            mIsDoubleClicked = true;
+         if( !HasCapture() )
+            CaptureMouse();
       }
       else if (mIsClicking) {
          mIsClicking = false;
@@ -431,21 +441,29 @@ void AButton::OnMouseEvent(wxMouseEvent & event)
    if (newState != prevState) {
       Refresh(false);
 
-      if (mCursorIsInWindow) {
-       #if wxUSE_TOOLTIPS // Not available in wxX11
-         // Display the tooltip in the status bar
-         wxToolTip * pTip = this->GetToolTip();
-         if( pTip ) {
-            wxString tipText = pTip->GetTip();
-            if (!mEnabled)
-               tipText += _(" (disabled)");
-            GetActiveProject()->TP_DisplayStatusMessage(tipText);
-         }
-       #endif
-      }
+      if (mCursorIsInWindow)
+         UpdateStatus();
       else {
          GetActiveProject()->TP_DisplayStatusMessage(wxT(""));
       }
+   }
+   else
+      event.Skip();
+}
+
+void AButton::UpdateStatus()
+{
+   if (mCursorIsInWindow) {
+#if wxUSE_TOOLTIPS // Not available in wxX11
+      // Display the tooltip in the status bar
+      wxToolTip * pTip = this->GetToolTip();
+      if( pTip ) {
+         wxString tipText = pTip->GetTip();
+         if (!mEnabled)
+            tipText += _(" (disabled)");
+         GetActiveProject()->TP_DisplayStatusMessage(tipText);
+      }
+#endif
    }
 }
 
@@ -464,16 +482,15 @@ void AButton::OnKeyDown(wxKeyEvent & event)
    switch( event.GetKeyCode() )
    {
    case WXK_RIGHT:
-      Navigate();
+      Navigate(wxNavigationKeyEvent::IsForward);
       break;
    case WXK_LEFT:
       Navigate(wxNavigationKeyEvent::IsBackward);
       break;
    case WXK_TAB:
-      if (event.ShiftDown())
-         Navigate(wxNavigationKeyEvent::IsBackward);
-      else
-         Navigate();
+      Navigate(event.ShiftDown()
+               ? wxNavigationKeyEvent::IsBackward
+               : wxNavigationKeyEvent::IsForward);
       break;
    case WXK_RETURN:
    case WXK_NUMPAD_ENTER:
@@ -510,16 +527,18 @@ bool AButton::WasControlDown()
 
 void AButton::Enable()
 {
+   wxWindow::Enable(true);
    mEnabled = true;
-   this->Refresh(false);
+   Refresh(false);
 }
 
 void AButton::Disable()
 {
+   wxWindow::Enable(false);
    mEnabled = false;
    if (GetCapture()==this)
       ReleaseMouse();
-   this->Refresh(false);
+   Refresh(false);
 }
 
 void AButton::PushDown()
@@ -553,6 +572,11 @@ void AButton::SetShift(bool shift)
 void AButton::SetControl(bool control)
 {
    mWasControlDown = control;
+}
+
+auto AButton::TemporarilyAllowFocus() -> TempAllowFocus {
+   s_AcceptsFocus = true;
+   return std::move(TempAllowFocus{ &s_AcceptsFocus });
 }
 
 #if wxUSE_ACCESSIBILITY

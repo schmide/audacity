@@ -17,20 +17,25 @@
 
 #include <wx/window.h>
 
-#include "../ShuttleGui.h"
-
 #include "PrefsPanel.h"
 
-class ProjectsPrefs:public PrefsPanel
+class ShuttleGui;
+
+class ProjectsPrefs final : public PrefsPanel
 {
  public:
    ProjectsPrefs(wxWindow * parent);
    ~ProjectsPrefs();
-   virtual bool Apply();
+   bool Apply() override;
 
  private:
    void Populate();
    void PopulateOrExchange(ShuttleGui & S);
 };
 
+class ProjectsPrefsFactory final : public PrefsPanelFactory
+{
+public:
+   PrefsPanel *Create(wxWindow *parent) override;
+};
 #endif

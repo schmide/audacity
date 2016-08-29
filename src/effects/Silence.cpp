@@ -14,13 +14,16 @@
 *//*******************************************************************/
 
 #include "../Audacity.h"
+#include "Silence.h"
 
 #include <wx/intl.h>
 
-#include "Silence.h"
+#include "../ShuttleGui.h"
+#include "../WaveTrack.h"
 
 EffectSilence::EffectSilence()
 {
+   SetLinearEffectFlag(true);
 }
 
 EffectSilence::~EffectSilence()
@@ -54,16 +57,13 @@ void EffectSilence::PopulateOrExchange(ShuttleGui & S)
    {
       S.StartHorizontalLay();
       {
-         bool isSelection;
-         double duration = GetDuration(&isSelection);
-
          S.AddPrompt(_("Duration:"));
-         mDurationT = new
+         mDurationT = safenew
             NumericTextCtrl(NumericConverter::TIME,
                               S.GetParent(),
                               wxID_ANY,
-                              isSelection ? _("hh:mm:ss + samples") : _("hh:mm:ss + milliseconds"),
-                              duration,
+                              GetDurationFormat(),
+                              GetDuration(),
                               mProjectRate,
                               wxDefaultPosition,
                               wxDefaultSize,

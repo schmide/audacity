@@ -39,8 +39,12 @@
 #include "../Audacity.h"
 #include "../Experimental.h"
 #include "NoiseReduction.h"
+#include "EffectManager.h"
 
+#include "../ShuttleGui.h"
 #include "../Prefs.h"
+
+#include "../WaveTrack.h"
 
 #include <algorithm>
 #include <vector>
@@ -334,7 +338,7 @@ private:
       FloatVector mRealFFTs;
       FloatVector mImagFFTs;
    };
-   std::vector<Record*> mQueue;
+   std::vector<movable_ptr<Record>> mQueue;
 };
 
 /****************************************************************//**
@@ -348,7 +352,7 @@ private:
 // EffectNoiseReduction::Dialog
 //----------------------------------------------------------------------------
 
-class EffectNoiseReduction::Dialog: public EffectDialog
+class EffectNoiseReduction::Dialog final : public EffectDialog
 {
 public:
    // constructors and destructors
@@ -408,7 +412,7 @@ private:
 };
 
 EffectNoiseReduction::EffectNoiseReduction()
-: mSettings(new EffectNoiseReduction::Settings)
+: mSettings(std::make_unique<EffectNoiseReduction::Settings>())
 {
    Init();
 }
@@ -452,7 +456,7 @@ bool EffectNoiseReduction::PromptUser(wxWindow *parent)
    // from an automation dialog, the only case in which we can
    // get here without any wavetracks.
    return mSettings->PromptUser(this, parent,
-      (mStatistics.get() != 0), (GetNumWaveTracks() == 0));
+      bool(mStatistics), (GetNumWaveTracks() == 0));
 }
 
 bool EffectNoiseReduction::Settings::PromptUser
@@ -517,7 +521,7 @@ bool EffectNoiseReduction::Settings::PrefsIO(bool read)
          { &Settings::mNoiseGain, wxT("Gain"), 12.0 },
          { &Settings::mAttackTime, wxT("AttackTime"), 0.02 },
          { &Settings::mReleaseTime, wxT("ReleaseTime"), 0.10 },
-         { &Settings::mFreqSmoothingBands, wxT("FreqSmoothing"), 0.0 },
+         { &Settings::mFreqSmoothingBands, wxT("FreqSmoothing"), 3.0 },
 
          // Advanced settings
          { &Settings::mOldSensitivity, wxT("OldSensitivity"), DEFAULT_OLD_SENSITIVITY },
@@ -596,7 +600,7 @@ bool EffectNoiseReduction::Process()
 
    this->CopyInputTracks(); // Set up mOutputTracks.
 
-   SelectedTrackListOfKindIterator iter(Track::Wave, mOutputTracks);
+   SelectedTrackListOfKindIterator iter(Track::Wave, mOutputTracks.get());
    WaveTrack *track = (WaveTrack *) iter.First();
    if (!track)
       return false;
@@ -605,8 +609,8 @@ bool EffectNoiseReduction::Process()
    // settings if reducing noise.
    if (mSettings->mDoProfile) {
       int spectrumSize = 1 + mSettings->WindowSize() / 2;
-      mStatistics.reset
-         (new Statistics(spectrumSize, track->GetRate(), mSettings->mWindowTypes));
+      mStatistics = std::make_unique<Statistics>
+         (spectrumSize, track->GetRate(), mSettings->mWindowTypes);
    }
    else if (mStatistics->mWindowSize != mSettings->WindowSize()) {
       // possible only with advanced settings
@@ -637,8 +641,6 @@ bool EffectNoiseReduction::Process()
 EffectNoiseReduction::Worker::~Worker()
 {
    EndFFT(hFFT);
-   for(int ii = 0, nn = mQueue.size(); ii < nn; ++ii)
-      delete mQueue[ii];
 }
 
 bool EffectNoiseReduction::Worker::Process
@@ -662,9 +664,9 @@ bool EffectNoiseReduction::Worker::Process
       double t1 = std::min(trackEnd, mT1);
 
       if (t1 > t0) {
-         sampleCount start = track->TimeToLongSamples(t0);
-         sampleCount end = track->TimeToLongSamples(t1);
-         sampleCount len = (sampleCount)(end - start);
+         auto start = track->TimeToLongSamples(t0);
+         auto end = track->TimeToLongSamples(t1);
+         auto len = end - start;
 
          if (!ProcessOne(effect, statistics, factory,
                          count, track, start, len))
@@ -764,10 +766,10 @@ EffectNoiseReduction::Worker::Worker
    const int nAttackBlocks = 1 + (int)(settings.mAttackTime * sampleRate / mStepSize);
    const int nReleaseBlocks = 1 + (int)(settings.mReleaseTime * sampleRate / mStepSize);
    // Applies to amplitudes, divide by 20:
-   mNoiseAttenFactor = pow(10.0, noiseGain / 20.0);
+   mNoiseAttenFactor = DB_TO_LINEAR(noiseGain);
    // Apply to gain factors which apply to amplitudes, divide by 20:
-   mOneBlockAttack = pow(10.0, (noiseGain / (20.0 * nAttackBlocks)));
-   mOneBlockRelease = pow(10.0, (noiseGain / (20.0 * nReleaseBlocks)));
+   mOneBlockAttack = DB_TO_LINEAR(noiseGain / nAttackBlocks);
+   mOneBlockRelease = DB_TO_LINEAR(noiseGain / nReleaseBlocks);
    // Applies to power, divide by 10:
    mOldSensitivityFactor = pow(10.0, settings.mOldSensitivity / 10.0);
 
@@ -793,7 +795,7 @@ EffectNoiseReduction::Worker::Worker
 
    mQueue.resize(mHistoryLen);
    for (int ii = 0; ii < mHistoryLen; ++ii)
-      mQueue[ii] = new Record(mSpectrumSize);
+      mQueue[ii] = make_movable<Record>(mSpectrumSize);
 
    // Create windows
 
@@ -982,9 +984,7 @@ void EffectNoiseReduction::Worker::FillFirstHistoryWindow()
 
 void EffectNoiseReduction::Worker::RotateHistoryWindows()
 {
-   Record *save = mQueue[mHistoryLen - 1];
-   mQueue.pop_back();
-   mQueue.insert(mQueue.begin(), save);
+   std::rotate(mQueue.begin(), mQueue.end() - 1, mQueue.end());
 }
 
 void EffectNoiseReduction::Worker::FinishTrackStatistics(Statistics &statistics)
@@ -1016,7 +1016,7 @@ void EffectNoiseReduction::Worker::FinishTrack
    // were input.
    // Well, not exactly, but not more than one step-size of extra samples
    // at the end.
-   // We'll delete them later in ProcessOne.
+   // We'll DELETE them later in ProcessOne.
 
    FloatVector empty(mStepSize);
 
@@ -1030,7 +1030,7 @@ void EffectNoiseReduction::Worker::GatherStatistics(Statistics &statistics)
    ++statistics.mTrackWindows;
 
    {
-      // new statistics
+      // NEW statistics
       const float *pPower = &mQueue[0]->mSpectrums[0];
       float *pSum = &statistics.mSums[0];
       for (int jj = 0; jj < mSpectrumSize; ++jj) {
@@ -1076,7 +1076,7 @@ bool EffectNoiseReduction::Worker::Classify(const Statistics &statistics, int ba
       }
 #endif
    // New methods suppose an exponential distribution of power values
-   // in the noise; new sensitivity is meant to be log of probability
+   // in the noise; NEW sensitivity is meant to be log of probability
    // that noise strays above the threshold.  Call that probability
    // 1 - F.  The quantile function of an exponential distribution is
    // log (1 - F) * mean.  Thus simply multiply mean by sensitivity
@@ -1287,19 +1287,21 @@ bool EffectNoiseReduction::Worker::ProcessOne
 
    StartNewTrack();
 
-   std::auto_ptr<WaveTrack> outputTrack(
-      mDoProfile ? NULL
-      : factory.NewWaveTrack(track->GetSampleFormat(), track->GetRate()));
+   WaveTrack::Holder outputTrack;
+   if(!mDoProfile)
+      outputTrack = factory.NewWaveTrack(track->GetSampleFormat(), track->GetRate());
 
-   sampleCount bufferSize = track->GetMaxBlockSize();
+   auto bufferSize = track->GetMaxBlockSize();
    FloatVector buffer(bufferSize);
 
    bool bLoopSuccess = true;
-   sampleCount blockSize;
-   sampleCount samplePos = start;
+   auto samplePos = start;
    while (bLoopSuccess && samplePos < start + len) {
       //Get a blockSize of samples (smaller than the size of the buffer)
-      blockSize = std::min(start + len - samplePos, track->GetBestBlockSize(samplePos));
+      const auto blockSize = limitSampleBufferSize(
+         track->GetBestBlockSize(samplePos),
+         start + len - samplePos
+      );
 
       //Get the samples from the track and put them in the buffer
       track->Get((samplePtr)&buffer[0], floatSample, samplePos, blockSize);
@@ -1332,6 +1334,7 @@ bool EffectNoiseReduction::Worker::ProcessOne
       outputTrack->HandleClear(tLen, outputTrack->GetEndTime(), false, false);
       bool bResult = track->ClearAndPaste(t0, t0 + tLen, &*outputTrack, true, false);
       wxASSERT(bResult); // TO DO: Actually handle this.
+      wxUnusedVar(bResult);
    }
 
    return bLoopSuccess;
@@ -1464,7 +1467,7 @@ const ControlInfo *controlInfo() {
          XO("R&elease time (secs):"), XO("Release time")),
 #endif
          ControlInfo(&EffectNoiseReduction::Settings::mFreqSmoothingBands,
-         0, 6, 6, wxT("%d"), true,
+         0, 12, 12, wxT("%d"), true,
          XO("&Frequency smoothing (bands):"), XO("Frequency smoothing")),
 
 #ifdef ADVANCED_SETTINGS
@@ -1481,7 +1484,7 @@ return table;
 } // namespace
 
 
-BEGIN_EVENT_TABLE(EffectNoiseReduction::Dialog, wxDialog)
+BEGIN_EVENT_TABLE(EffectNoiseReduction::Dialog, wxDialogWrapper)
    EVT_BUTTON(wxID_OK, EffectNoiseReduction::Dialog::OnReduceNoise)
    EVT_BUTTON(wxID_CANCEL, EffectNoiseReduction::Dialog::OnCancel)
    EVT_BUTTON(ID_EFFECT_PREVIEW, EffectNoiseReduction::Dialog::OnPreview)
@@ -1564,7 +1567,7 @@ void EffectNoiseReduction::Dialog::DisableControlsIfIsolating()
    // If Isolate is chosen, disable controls that define
    // "what to do with noise" rather than "what is noise."
    // Else, enable them.
-   // This does NOT include sensitivity, new or old, nor
+   // This does NOT include sensitivity, NEW or old, nor
    // the choice of window functions, size, or step.
    // The method choice is not included, because it affects
    // which sensitivity slider is operative, and that is part
@@ -1613,6 +1616,9 @@ void EffectNoiseReduction::Dialog::EnableDisableSensitivityControls()
 
 void EffectNoiseReduction::Dialog::OnGetProfile(wxCommandEvent & WXUNUSED(event))
 {
+   // Project has not be changed so skip pushing state
+   EffectManager::Get().SetSkipStateFlag(true);
+
    if (!TransferDataFromWindow())
       return;
 
@@ -1688,13 +1694,6 @@ void EffectNoiseReduction::Dialog::PopulateOrExchange(ShuttleGui & S)
       S.AddVariableText(_(
          "Select all of the audio you want filtered, choose how much noise you want\nfiltered out, and then click 'OK' to reduce noise.\n"));
 
-#if defined(__WXGTK__)
-      // Put everything inside a panel to workaround a problem on Linux where the access key
-      // does not work if it is defined within static text on the first control.
-      S.SetStyle(wxTAB_TRAVERSAL);
-      S.StartPanel();
-#endif
-
       S.StartMultiColumn(3, wxEXPAND);
       S.SetStretchyCol(2);
       {
@@ -1730,10 +1729,6 @@ void EffectNoiseReduction::Dialog::PopulateOrExchange(ShuttleGui & S)
 #endif
       }
       S.EndMultiColumn();
-
-#if defined(__WXGTK__)
-      S.EndPanel();
-#endif
    }
    S.EndStatic();
 
@@ -1741,13 +1736,6 @@ void EffectNoiseReduction::Dialog::PopulateOrExchange(ShuttleGui & S)
 #ifdef ADVANCED_SETTINGS
    S.StartStatic(_("Advanced Settings"));
    {
-#if defined(__WXGTK__)
-      // Put everything inside a panel to workaround a problem on Linux where the access key
-      // does not work if it is defined within static text on the first control.
-      S.SetStyle(wxTAB_TRAVERSAL);
-      S.StartPanel();
-#endif
-
       S.StartMultiColumn(2);
       {
          {
@@ -1817,10 +1805,6 @@ void EffectNoiseReduction::Dialog::PopulateOrExchange(ShuttleGui & S)
          }
       }
       S.EndMultiColumn();
-
-#if defined(__WXGTK__)
-      S.EndPanel();
-#endif
    }
    S.EndStatic();
 #endif

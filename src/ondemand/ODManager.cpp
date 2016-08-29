@@ -14,6 +14,7 @@ ODTask requests and internals.
 
 *//*******************************************************************/
 
+#include "../Audacity.h"
 #include "ODManager.h"
 #include "ODTask.h"
 #include "ODTaskThread.h"
@@ -31,7 +32,7 @@ static bool gPause=false; //to be loaded in and used with Pause/Resume before OD
 /// a flag that is set if we have loaded some OD blockfiles from PCM.
 static bool sHasLoadedOD=false;
 
-ODManager* ODManager::pMan=NULL;
+std::unique_ptr<ODManager> ODManager::pMan{};
 //init the accessor function pointer - use the first time version of the interface fetcher
 //first we need to typedef the function pointer type because the compiler doesn't support it in the raw
 typedef  ODManager* (*pfodman)();
@@ -50,37 +51,44 @@ int CompareNoCaseFileName(const wxString& first, const wxString& second)
    return first.CmpNoCase(second);
 }
 
-void ODManager::LockLibSndFileMutex()
-{
-   sLibSndFileMutex.Lock();
-}
-
-void ODManager::UnlockLibSndFileMutex()
-{
-   sLibSndFileMutex.Unlock();
-}
-
-
 //private constructor - Singleton.
 ODManager::ODManager()
 {
    mTerminate = false;
    mTerminated = false;
-   mPause= gPause;
+   mPause = gPause;
 
    //must set up the queue condition
-   mQueueNotEmptyCond = new ODCondition(&mQueueNotEmptyCondLock);
+   mQueueNotEmptyCond = std::make_unique<ODCondition>(&mQueueNotEmptyCondLock);
 }
 
-//private destructor - delete with static method Quit()
+//private destructor - DELETE with static method Quit()
 ODManager::~ODManager()
 {
+   mTerminateMutex.Lock();
+   mTerminate = true;
+   mTerminateMutex.Unlock();
+
+   //This while loop waits for ODTasks to finish and the DELETE removes all tasks from the Queue.
+   //This function is called from the main audacity event thread, so there should not be more requests for pMan
+   mTerminatedMutex.Lock();
+   while (!mTerminated)
+   {
+      mTerminatedMutex.Unlock();
+      wxThread::Sleep(200);
+
+      //signal the queue not empty condition since the ODMan thread will wait on the queue condition
+      mQueueNotEmptyCondLock.Lock();
+      mQueueNotEmptyCond->Signal();
+      mQueueNotEmptyCondLock.Unlock();
+
+      mTerminatedMutex.Lock();
+   }
+   mTerminatedMutex.Unlock();
+
    //get rid of all the queues.  The queues get rid of the tasks, so we don't worry abut them.
    //nothing else should be running on OD related threads at this point, so we don't lock.
-   for(unsigned int i=0;i<mQueues.size();i++)
-      delete mQueues[i];
-
-   delete mQueueNotEmptyCond;
+   mQueues.clear();
 }
 
 ///Adds a task to running queue.  Thread-safe.
@@ -96,11 +104,9 @@ void ODManager::AddTask(ODTask* task)
    paused=mPause;
    mPauseLock.Unlock();
 
-   mQueueNotEmptyCondLock.Lock();
    //don't signal if we are paused since if we wake up the loop it will start processing other tasks while paused
    if(!paused)
       mQueueNotEmptyCond->Signal();
-   mQueueNotEmptyCondLock.Unlock();
 }
 
 void ODManager::SignalTaskQueueLoop()
@@ -110,11 +116,9 @@ void ODManager::SignalTaskQueueLoop()
    mPauseLock.Lock();
    paused=mPause;
    mPauseLock.Unlock();
-   mQueueNotEmptyCondLock.Lock();
    //don't signal if we are paused
    if(!paused)
       mQueueNotEmptyCond->Signal();
-   mQueueNotEmptyCondLock.Unlock();
 }
 
 ///removes a task from the active task queue
@@ -134,12 +138,13 @@ void ODManager::RemoveTaskIfInQueue(ODTask* task)
 
 }
 
-///Adds a new task to the queue.  Creates a queue if the tracks associated with the task is not in the list
+///Adds a NEW task to the queue.  Creates a queue if the tracks associated with the task is not in the list
 ///
 ///@param task the task to add
 ///@param lockMutex locks the mutexes if true (default).  This function is used within other ODManager calls, which many need to set this to false.
-void ODManager::AddNewTask(ODTask* task, bool lockMutex)
+void ODManager::AddNewTask(movable_ptr<ODTask> &&mtask, bool lockMutex)
 {
+   auto task = mtask.get();
    ODWaveTrackTaskQueue* queue = NULL;
 
    if(lockMutex)
@@ -149,23 +154,23 @@ void ODManager::AddNewTask(ODTask* task, bool lockMutex)
       //search for a task containing the lead track.  wavetrack removal is threadsafe and bound to the mQueuesMutex
       //note that GetWaveTrack is not threadsafe, but we are assuming task is not running on a different thread yet.
       if(mQueues[i]->ContainsWaveTrack(task->GetWaveTrack(0)))
-         queue=mQueues[i];
+         queue = mQueues[i].get();
    }
 
    if(queue)
    {
       //Add it to the existing queue but keep the lock since this reference can be deleted.
-      queue->AddTask(task);
+      queue->AddTask(std::move(mtask));
       if(lockMutex)
          mQueuesMutex.Unlock();
    }
    else
    {
-      //Make a new one, add it to the local track queue, and to the immediate running task list,
+      //Make a NEW one, add it to the local track queue, and to the immediate running task list,
       //since this task is definitely at the head
-      queue = new ODWaveTrackTaskQueue();
-      queue->AddTask(task);
-      mQueues.push_back(queue);
+      auto newqueue = make_movable<ODWaveTrackTaskQueue>();
+      newqueue->AddTask(std::move(mtask));
+      mQueues.push_back(std::move(newqueue));
       if(lockMutex)
          mQueuesMutex.Unlock();
 
@@ -179,7 +184,7 @@ ODManager* ODManager::InstanceFirstTime()
    gODInitedMutex.Lock();
    if(!pMan)
    {
-      pMan = new ODManager();
+      pMan.reset(safenew ODManager());
       pMan->Init();
       gManagerCreated = true;
    }
@@ -188,13 +193,13 @@ ODManager* ODManager::InstanceFirstTime()
    //change the accessor function to use the quicker method.
    Instance = &(ODManager::InstanceNormal);
 
-   return pMan;
+   return pMan.get();
 }
 
 //faster method of instance fetching once init is done
 ODManager* ODManager::InstanceNormal()
 {
-   return pMan;
+   return pMan.get();
 }
 
 bool ODManager::IsInstanceCreated()
@@ -213,7 +218,9 @@ void ODManager::Init()
    mMaxThreads = 5;
 
    //   wxLogDebug(wxT("Initializing ODManager...Creating manager thread"));
-   ODManagerHelperThread* startThread = new ODManagerHelperThread;
+   // This is a detached thread, so it deletes itself when it finishes
+   // ... except on Mac where we we don't use wxThread for reasons unexplained
+   ODManagerHelperThread* startThread = safenew ODManagerHelperThread;
 
 //   startThread->SetPriority(0);//default of 50.
    startThread->Create();
@@ -234,7 +241,6 @@ void ODManager::DecrementCurrentThreads()
 ///Main loop for managing threads and tasks.
 void ODManager::Start()
 {
-   ODTaskThread* thread;
    bool tasksInArray;
    bool paused;
    int  numQueues=0;
@@ -251,7 +257,7 @@ void ODManager::Start()
       mTerminateMutex.Unlock();
 //    printf("ODManager thread running \n");
 
-      //we should look at our WaveTrack queues to see if we can process a new task to the running queue.
+      //we should look at our WaveTrack queues to see if we can process a NEW task to the running queue.
       UpdateQueues();
 
       //start some threads if necessary
@@ -272,8 +278,10 @@ void ODManager::Start()
          mCurrentThreadsMutex.Unlock();
 
          mTasksMutex.Lock();
-         //detach a new thread.
-         thread = new ODTaskThread(mTasks[0]);//task);
+         //detach a NEW thread.
+         // This is a detached thread, so it deletes itself when it finishes
+         // ... except on Mac where we we don't use wxThread for reasons unexplained
+         auto thread = safenew ODTaskThread(mTasks[0]);//task);
          //thread->SetPriority(10);//default is 50.
          thread->Create();
          thread->Run();
@@ -290,10 +298,11 @@ void ODManager::Start()
 
       // JKC: If there are no tasks ready to run, or we're paused then
       // we wait for there to be tasks in the queue.
-      mQueueNotEmptyCondLock.Lock();
-      if( (!tasksInArray) || paused)
-         mQueueNotEmptyCond->Wait();
-      mQueueNotEmptyCondLock.Unlock();
+      {
+         ODLocker locker{ &mQueueNotEmptyCondLock };
+         if( (!tasksInArray) || paused)
+            mQueueNotEmptyCond->Wait();
+      }
 
       //if there is some ODTask running, then there will be something in the queue.  If so then redraw to show progress
       mQueuesMutex.Lock();
@@ -308,11 +317,10 @@ void ODManager::Start()
       {
          mNeedsDraw=0;
          wxCommandEvent event( EVT_ODTASK_UPDATE );
-         AudacityProject::AllProjectsDeleteLock();
+         ODLocker locker{ &AudacityProject::AllProjectDeleteMutex() };
          AudacityProject* proj = GetActiveProject();
          if(proj)
             proj->GetEventHandler()->AddPendingEvent(event);
-         AudacityProject::AllProjectsDeleteUnlock();
       }
       mTerminateMutex.Lock();
    }
@@ -329,7 +337,7 @@ void ODManager::Start()
 //static function that prevents ODTasks from being scheduled
 //does not stop currently running tasks from completing their immediate subtask,
 //but presumably they will finish within a second
-void ODManager::Pause(bool pause)
+void ODManager::Pauser::Pause(bool pause)
 {
    if(IsInstanceCreated())
    {
@@ -337,10 +345,9 @@ void ODManager::Pause(bool pause)
       pMan->mPause = pause;
       pMan->mPauseLock.Unlock();
 
-      //we should check the queue again.
-      pMan->mQueueNotEmptyCondLock.Lock();
-      pMan->mQueueNotEmptyCond->Signal();
-      pMan->mQueueNotEmptyCondLock.Unlock();
+      if(!pause)
+         //we should check the queue again.
+         pMan->mQueueNotEmptyCond->Signal();
    }
    else
    {
@@ -348,7 +355,7 @@ void ODManager::Pause(bool pause)
    }
 }
 
-void ODManager::Resume()
+void ODManager::Pauser::Resume()
 {
    Pause(false);
 }
@@ -357,27 +364,7 @@ void ODManager::Quit()
 {
    if(IsInstanceCreated())
    {
-      pMan->mTerminateMutex.Lock();
-      pMan->mTerminate = true;
-      pMan->mTerminateMutex.Unlock();
-
-      //This while loop waits for ODTasks to finish and the delete removes all tasks from the Queue.
-      //This function is called from the main audacity event thread, so there should not be more requests for pMan
-      pMan->mTerminatedMutex.Lock();
-      while(!pMan->mTerminated)
-      {
-         pMan->mTerminatedMutex.Unlock();
-         wxThread::Sleep(200);
-
-         //signal the queue not empty condition since the ODMan thread will wait on the queue condition
-         pMan->mQueueNotEmptyCondLock.Lock();
-         pMan->mQueueNotEmptyCond->Signal();
-         pMan->mQueueNotEmptyCondLock.Unlock();
-
-         pMan->mTerminatedMutex.Lock();
-      }
-      pMan->mTerminatedMutex.Unlock();
-      delete pMan;
+      pMan.reset();
    }
 }
 
@@ -404,7 +391,7 @@ void ODManager::ReplaceWaveTrack(WaveTrack* oldTrack,WaveTrack* newTrack)
    mQueuesMutex.Unlock();
 }
 
-///if it shares a queue/task, creates a new queue/task for the track, and removes it from any previously existing tasks.
+///if it shares a queue/task, creates a NEW queue/task for the track, and removes it from any previously existing tasks.
 void ODManager::MakeWaveTrackIndependent(WaveTrack* track)
 {
    ODWaveTrackTaskQueue* owner=NULL;
@@ -413,7 +400,7 @@ void ODManager::MakeWaveTrackIndependent(WaveTrack* track)
    {
       if(mQueues[i]->ContainsWaveTrack(track))
       {
-         owner = mQueues[i];
+         owner = mQueues[i].get();
          break;
       }
    }
@@ -431,7 +418,7 @@ void ODManager::MakeWaveTrackIndependent(WaveTrack* track)
 bool ODManager::MakeWaveTrackDependent(WaveTrack* dependentTrack,WaveTrack* masterTrack)
 {
    //First, check to see if the task lists are mergeable.  If so, we can simply add this track to the other task and queue,
-   //then delete this one.
+   //then DELETE this one.
    ODWaveTrackTaskQueue* masterQueue=NULL;
    ODWaveTrackTaskQueue* dependentQueue=NULL;
    unsigned int dependentIndex = 0;
@@ -442,11 +429,11 @@ bool ODManager::MakeWaveTrackDependent(WaveTrack* dependentTrack,WaveTrack* mast
    {
       if(mQueues[i]->ContainsWaveTrack(masterTrack))
       {
-         masterQueue = mQueues[i];
+         masterQueue = mQueues[i].get();
       }
       else if(mQueues[i]->ContainsWaveTrack(dependentTrack))
       {
-         dependentQueue = mQueues[i];
+         dependentQueue = mQueues[i].get();
          dependentIndex = i;
       }
 
@@ -467,7 +454,6 @@ bool ODManager::MakeWaveTrackDependent(WaveTrack* dependentTrack,WaveTrack* mast
    //finally remove the dependent track
    mQueues.erase(mQueues.begin()+dependentIndex);
    mQueuesMutex.Unlock();
-   delete dependentQueue; //note this locks the ODManager's current task queue.
    return true;
 }
 
@@ -485,7 +471,7 @@ void ODManager::DemandTrackUpdate(WaveTrack* track, double seconds)
    mQueuesMutex.Unlock();
 }
 
-///remove tasks from ODWaveTrackTaskQueues that have been done.  Schedules new ones if they exist
+///remove tasks from ODWaveTrackTaskQueues that have been done.  Schedules NEW ones if they exist
 ///Also remove queues that have become empty.
 void ODManager::UpdateQueues()
 {
@@ -494,24 +480,22 @@ void ODManager::UpdateQueues()
    {
       if(mQueues[i]->IsFrontTaskComplete())
       {
-         //this should delete and remove the front task instance.
+         //this should DELETE and remove the front task instance.
          mQueues[i]->RemoveFrontTask();
          //schedule next.
          if(!mQueues[i]->IsEmpty())
          {
             //we need to release the lock on the queue vector before using the task vector's lock or we deadlock
             //so get a temp.
-            ODWaveTrackTaskQueue* queue;
-            queue = mQueues[i];
+            ODWaveTrackTaskQueue* queue = mQueues[i].get();
 
             AddTask(queue->GetFrontTask());
          }
       }
 
-      //if the queue is empty delete it.
+      //if the queue is empty DELETE it.
       if(mQueues[i]->IsEmpty())
       {
-         delete mQueues[i];
          mQueues.erase(mQueues.begin()+i);
          i--;
       }
@@ -541,12 +525,12 @@ bool ODManager::HasLoadedODFlag()
 }
 
 ///fills in the status bar message for a given track
-void ODManager::FillTipForWaveTrack( WaveTrack * t, const wxChar ** ppTip )
+void ODManager::FillTipForWaveTrack( WaveTrack * t, wxString &tip )
 {
    mQueuesMutex.Lock();
    for(unsigned int i=0;i<mQueues.size();i++)
    {
-      mQueues[i]->FillTipForWaveTrack(t,ppTip);
+      mQueues[i]->FillTipForWaveTrack(t, tip);
    }
    mQueuesMutex.Unlock();
 }

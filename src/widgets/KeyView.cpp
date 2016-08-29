@@ -53,47 +53,14 @@ KeyView::KeyView(wxWindow *parent,
                  wxWindowID id,
                  const wxPoint & pos,
                  const wxSize & size)
-: wxVListBox(parent, id, pos, size, wxBORDER_THEME),
-  mOpen(NULL),
-  mClosed(NULL),
+: wxVListBox(parent, id, pos, size, wxBORDER_THEME | wxHSCROLL | wxVSCROLL),
   mScrollX(0),
   mWidth(0)
 {
 #if wxUSE_ACCESSIBILITY
    // Create and set accessibility object
-   mAx = new KeyViewAx(this);
-   SetAccessible(mAx);
+   SetAccessible(mAx = safenew KeyViewAx(this));
 #endif
-
-   // Create the device context
-   wxMemoryDC dc;
-
-   // Create the open/expanded bitmap
-   mOpen = new wxBitmap(16, 16);
-   dc.SelectObject(*mOpen);
-
-   dc.SetBrush(*wxWHITE_BRUSH);
-   dc.SetPen(*wxWHITE_PEN);
-   dc.DrawRectangle(0, 0, 16, 16);
-
-   dc.SetPen(*wxBLACK_PEN);
-   dc.DrawRectangle(3, 4, 9, 9);
-   dc.DrawLine(5, 8, 10, 8);
-   dc.SelectObject(wxNullBitmap);
-
-   // Create the closed/collapsed bitmap
-   mClosed = new wxBitmap(16, 16);
-   dc.SelectObject(*mClosed);
-
-   dc.SetBrush(*wxWHITE_BRUSH);
-   dc.SetPen(*wxWHITE_PEN);
-   dc.DrawRectangle(0, 0, 16, 16);
-
-   dc.SetPen(*wxBLACK_PEN);
-   dc.DrawRectangle(3, 4, 9, 9);
-   dc.DrawLine(7, 6, 7, 11);
-   dc.DrawLine(5, 8, 10, 8);
-   dc.SelectObject(wxNullBitmap);
 
    // The default view
    mViewType = ViewByTree;
@@ -104,16 +71,6 @@ KeyView::KeyView(wxWindow *parent,
 
 KeyView::~KeyView()
 {
-   // Cleanup
-   if (mOpen)
-   {
-      delete mOpen;
-   }
-
-   if (mClosed)
-   {
-      delete mClosed;
-   }
 }
 
 //
@@ -308,7 +265,7 @@ KeyView::SetKey(int index, const wxString & key)
       return false;
    }
 
-   // Set the new key
+   // Set the NEW key
    node.key = key;
 
    // Check to see if the key column needs to be expanded
@@ -381,7 +338,7 @@ KeyView::SetView(ViewByType type)
    // Unselect any currently selected line...do even if none selected
    SelectNode(-1);
 
-   // Save new type
+   // Save NEW type
    mViewType = type;
 
    // Refresh the view lines
@@ -554,7 +511,7 @@ KeyView::UpdateHScroll()
 }
 
 //
-// Process a new set of bindings
+// Process a NEW set of bindings
 //
 void
 KeyView::RefreshBindings(const wxArrayString & names,
@@ -598,10 +555,10 @@ KeyView::RefreshBindings(const wxArrayString & names,
          cat += _("Menu");
       }
 
-      // Process a new category
+      // Process a NEW category
       if (cat != lastcat)
       {
-         // A new category always finishes any current subtree
+         // A NEW category always finishes any current subtree
          if (inpfx)
          {
             // Back to category level
@@ -620,7 +577,7 @@ KeyView::RefreshBindings(const wxArrayString & names,
          // Remember for next iteration
          lastcat = cat;
 
-         // Add a new category node
+         // Add a NEW category node
          if (cat != wxEmptyString)
          {
             KeyNode node;
@@ -646,7 +603,7 @@ KeyView::RefreshBindings(const wxArrayString & names,
          }
       }
 
-      // Process a new prefix
+      // Process a NEW prefix
       if (pfx != lastpfx)
       {
          // Done with prefix branch
@@ -659,7 +616,7 @@ KeyView::RefreshBindings(const wxArrayString & names,
          // Remember for next iteration
          lastpfx = pfx;
 
-         // Add a new prefix node
+         // Add a NEW prefix node
          if (pfx != wxEmptyString)
          {
             KeyNode node;
@@ -991,7 +948,7 @@ KeyView::RefreshLines()
    }
 #endif
 
-   // Tell listbox the new count and refresh the entire view
+   // Tell listbox the NEW count and refresh the entire view
    SetItemCount(mLines.GetCount());
    RefreshAll();
 
@@ -1098,7 +1055,7 @@ KeyView::OnDrawBackground(wxDC & dc, const wxRect & rect, size_t line) const
       }
       else
       {
-         // Non ocused lines get a light background
+         // Non focused lines get a light background
          dc.SetBrush(wxBrush(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE)));
          dc.SetPen(*wxTRANSPARENT_PEN);
          dc.DrawRectangle(r);
@@ -1142,15 +1099,28 @@ KeyView::OnDrawItem(wxDC & dc, const wxRect & rect, size_t line) const
       // Adjust left edge to account for scrolling
       wxCoord x = rect.x - mScrollX;
 
-      if (node->iscat)
+      if (node->iscat || node->ispfx)
       {
-         // Draw categories bitmap at left edge
-         dc.DrawBitmap(node->isopen ? *mOpen : *mClosed, x, rect.y);
-      }
-      else if (node->ispfx)
-      {
-         // Draw prefix bitmap to the right of the category bitmap
-         dc.DrawBitmap(node->isopen ? *mOpen : *mClosed, x + KV_BITMAP_SIZE, rect.y);
+         wxCoord bx = x;
+         wxCoord by = rect.y;
+
+         if (node->ispfx)
+         {
+            bx += KV_BITMAP_SIZE;
+         }
+
+         dc.SetBrush(*wxTRANSPARENT_BRUSH);
+         dc.SetPen(*wxBLACK_PEN);
+         dc.DrawRectangle(bx + 3, by + 4, 9, 9);
+         if (node->isopen)
+         {
+            AColor::Line(dc, bx + 5, by + 8, bx + 9, by + 8);
+         }
+         else
+         {
+            AColor::Line(dc, bx + 7, by + 6, bx + 7, by + 10);
+            AColor::Line(dc, bx + 5, by + 8, bx + 9, by + 8);
+         }
       }
 
       // Indent text
@@ -1228,15 +1198,11 @@ KeyView::OnSetFocus(wxFocusEvent & event)
    event.Skip();
 
    // Refresh the selected line to pull in any changes while
-   // focus was away...like when setting a new key value.  This
+   // focus was away...like when setting a NEW key value.  This
    // will also refresh the visual (highlighted) state.
    if (GetSelection() != wxNOT_FOUND)
    {
-#if wxCHECK_VERSION(3,0,0)
 	   RefreshRow(GetSelection());
-#else
-	   RefreshLine(GetSelection());
-#endif
    }
 
 #if wxUSE_ACCESSIBILITY
@@ -1257,11 +1223,7 @@ KeyView::OnKillFocus(wxFocusEvent & event)
    // Refresh the selected line to adjust visual highlighting.
    if (GetSelection() != wxNOT_FOUND)
    {
-#if wxCHECK_VERSION(3,0,0)
 	   RefreshRow(GetSelection());
-#else
-	   RefreshLine(GetSelection());
-#endif
    }
 }
 
@@ -1289,7 +1251,7 @@ KeyView::OnScroll(wxScrollWinEvent & event)
       return;
    }
 
-   // Get new scroll position and scroll the view
+   // Get NEW scroll position and scroll the view
    mScrollX = event.GetPosition();
    SetScrollPos(wxHORIZONTAL, mScrollX);
 
@@ -1336,11 +1298,7 @@ KeyView::OnKeyDown(wxKeyEvent & event)
             RefreshLines();
 
             // Reset the original top line
-#if wxCHECK_VERSION(3,0,0)
-			ScrollToRow(topline);
-#else
-			ScrollToLine(topline);
-#endif
+            ScrollToRow(topline);
 
             // And make sure current line is still selected
             SelectNode(LineToIndex(line));
@@ -1404,11 +1362,7 @@ KeyView::OnKeyDown(wxKeyEvent & event)
                RefreshLines();
 
                // Reset the original top line
-#if wxCHECK_VERSION(3,0,0)
-			   ScrollToRow(topline);
-#else
-			   ScrollToLine(topline);
-#endif
+               ScrollToRow(topline);
 
                // And make sure current line is still selected
                SelectNode(LineToIndex(line));
@@ -1529,7 +1483,7 @@ KeyView::OnLeftDown(wxMouseEvent & event)
    wxPoint pos = event.GetPosition();
 
    // And see if it was on a line within the view
-   int line = HitTest(pos);
+   int line = VirtualHitTest(pos.y);
 
    // It was on a line
    if (line != wxNOT_FOUND)
@@ -1550,11 +1504,7 @@ KeyView::OnLeftDown(wxMouseEvent & event)
          RefreshLines();
 
          // Reset the original top line
-#if wxCHECK_VERSION(3,0,0)
-		 ScrollToRow(topline);
-#else
-		 ScrollToLine(topline);
-#endif
+         ScrollToRow(topline);
 
          // And make sure current line is still selected
          SelectNode(LineToIndex(line));
@@ -1780,11 +1730,7 @@ KeyView::GetLineHeight(int line)
       return 0;
    }
 
-#if wxCHECK_VERSION(3,0,0)
    return OnGetRowHeight(line);
-#else
-   return OnGetLineHeight(line);
-#endif
 }
 
 //
@@ -1864,7 +1810,7 @@ KeyViewAx::ListUpdated()
 }
 
 //
-// Inform accessibility a new line has been selected and/or a previously
+// Inform accessibility a NEW line has been selected and/or a previously
 // selected line is being unselected
 //
 void

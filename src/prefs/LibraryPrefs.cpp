@@ -29,6 +29,8 @@ MP3 and FFmpeg encoding libraries.
 
 #include "LibraryPrefs.h"
 
+#include "../Experimental.h"
+
 ////////////////////////////////////////////////////////////////////////////////
 
 #define ID_MP3_FIND_BUTTON          7001
@@ -140,6 +142,10 @@ void LibraryPrefs::PopulateOrExchange(ShuttleGui & S)
 #if !defined(USE_FFMPEG) || defined(DISABLE_DYNAMIC_LOADING_FFMPEG)
          bdwn->Enable(FALSE);
          bfnd->Enable(FALSE);
+#else
+         // fix compilation warnings about unused variables
+         wxUnusedVar(bfnd);
+         wxUnusedVar(bdwn);
 #endif
       }
       S.EndTwoColumn();
@@ -186,7 +192,7 @@ void LibraryPrefs::SetFFmpegVersionText()
 void LibraryPrefs::OnFFmpegFindButton(wxCommandEvent & WXUNUSED(event))
 {
 #ifdef USE_FFMPEG
-   FFmpegLibs* FFmpegLibsInst = PickFFmpegLibs();
+   FFmpegLibs* FFmpegLibsPtr = PickFFmpegLibs();
    bool showerrs =
 #if defined(__WXDEBUG__)
       true;
@@ -194,7 +200,7 @@ void LibraryPrefs::OnFFmpegFindButton(wxCommandEvent & WXUNUSED(event))
       false;
 #endif
 
-   FFmpegLibsInst->FreeLibs();
+   FFmpegLibsPtr->FreeLibs();
    // Load the libs ('true' means that all errors will be shown)
    bool locate = !LoadFFmpeg(showerrs);
 
@@ -210,8 +216,8 @@ void LibraryPrefs::OnFFmpegFindButton(wxCommandEvent & WXUNUSED(event))
 
    if (locate) {
       // Show "Locate FFmpeg" dialog
-      FFmpegLibsInst->FindLibs(this);
-      FFmpegLibsInst->FreeLibs();
+      FFmpegLibsPtr->FindLibs(this);
+      FFmpegLibsPtr->FreeLibs();
       LoadFFmpeg(showerrs);
    }
    SetFFmpegVersionText();
@@ -231,4 +237,10 @@ bool LibraryPrefs::Apply()
    PopulateOrExchange(S);
 
    return true;
+}
+
+PrefsPanel *LibraryPrefsFactory::Create(wxWindow *parent)
+{
+   wxASSERT(parent); // to justify safenew
+   return safenew LibraryPrefs(parent);
 }

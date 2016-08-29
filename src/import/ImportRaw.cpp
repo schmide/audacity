@@ -22,8 +22,8 @@ and sample size to help you importing data of an unknown format.
 
 
 #include "../Audacity.h"
-
 #include "ImportRaw.h"
+
 #include "Import.h"
 
 #include "../DirManager.h"
@@ -57,7 +57,7 @@ and sample size to help you importing data of an unknown format.
 
 #include "sndfile.h"
 
-class ImportRawDialog:public wxDialog {
+class ImportRawDialog final : public wxDialogWrapper {
 
   public:
    ImportRawDialog(wxWindow * parent,
@@ -93,195 +93,205 @@ class ImportRawDialog:public wxDialog {
    DECLARE_EVENT_TABLE()
 };
 
-int ImportRaw(wxWindow *parent, wxString fileName,
-              TrackFactory *trackFactory, Track ***outTracks)
+void ImportRaw(wxWindow *parent, const wxString &fileName,
+              TrackFactory *trackFactory, TrackHolders &outTracks)
 {
+   outTracks.clear();
    int encoding = 0; // Guess Format
-   int numChannels = 0;
    sampleFormat format;
    sf_count_t offset = 0;
-   sampleCount totalFrames;
    double rate = 44100.0;
    double percent = 100.0;
-   SNDFILE *sndFile = NULL;
-   SF_INFO sndInfo;
-   int result;
-
-   try {
-      // Yes, FormatClassifier currently handles filenames in UTF8 format only, that's
-      // a TODO ...
-      FormatClassifier theClassifier(fileName.utf8_str());
-      encoding = theClassifier.GetResultFormatLibSndfile();
-      numChannels = theClassifier.GetResultChannels();
-      offset = 0;
-   } catch (...) {
-      // Something went wrong in FormatClassifier, use defaults instead.
-      encoding = 0;
-   }
-
-   if (encoding <= 0) {
-      // Unable to guess.  Use mono, 16-bit samples with CPU endianness
-      // as the default.
-      encoding = SF_FORMAT_RAW | SF_ENDIAN_CPU | SF_FORMAT_PCM_16;
-      numChannels = 1;
-      offset = 0;
-   }
-
-   ImportRawDialog dlog(parent, encoding, numChannels, (int)offset, rate);
-   dlog.ShowModal();
-   if (!dlog.GetReturnCode())
-      return false;
-
-   encoding = dlog.mEncoding;
-   numChannels = dlog.mChannels;
-   rate = dlog.mRate;
-   offset = (sf_count_t)dlog.mOffset;
-   percent = dlog.mPercent;
-
-   memset(&sndInfo, 0, sizeof(SF_INFO));
-   sndInfo.samplerate = (int)rate;
-   sndInfo.channels = (int)numChannels;
-   sndInfo.format = encoding | SF_FORMAT_RAW;
-
-   wxFile f;   // will be closed when it goes out of scope
-
-   if (f.Open(fileName)) {
-      // Even though there is an sf_open() that takes a filename, use the one that
-      // takes a file descriptor since wxWidgets can open a file with a Unicode name and
-      // libsndfile can't (under Windows).
-      sndFile = sf_open_fd(f.fd(), SFM_READ, &sndInfo, FALSE);
-   }
-
-   if (!sndFile){
-      // TODO: Handle error
-      char str[1000];
-      sf_error_str((SNDFILE *)NULL, str, 1000);
-      printf("%s\n", str);
-
-      return 0;
-   }
-
-   result = sf_command(sndFile, SFC_SET_RAW_START_OFFSET, &offset, sizeof(offset));
-   if (result != 0) {
-      char str[1000];
-      sf_error_str(sndFile, str, 1000);
-      printf("%s\n", str);
-   }
-
-   sf_seek(sndFile, 0, SEEK_SET);
-
-   totalFrames = (sampleCount)(sndInfo.frames * percent / 100.0);
-
-   //
-   // Sample format:
-   //
-   // In general, go with the user's preferences.  However, if
-   // the file is higher-quality, go with a format which preserves
-   // the quality of the original file.
-   //
-
-   format = (sampleFormat)
-      gPrefs->Read(wxT("/SamplingRate/DefaultProjectSampleFormat"), floatSample);
-
-   if (format != floatSample &&
-       sf_subtype_more_than_16_bits(encoding))
-      format = floatSample;
-
-   WaveTrack **channels = new WaveTrack *[numChannels];
-
-   int c;
-   for (c = 0; c < numChannels; c++) {
-      channels[c] = trackFactory->NewWaveTrack(format, rate);
-
-      if (numChannels > 1)
-         switch (c) {
-         case 0:
-            channels[c]->SetChannel(Track::LeftChannel);
-            break;
-         case 1:
-            channels[c]->SetChannel(Track::RightChannel);
-            break;
-         default:
-            channels[c]->SetChannel(Track::MonoChannel);
-         }
-   }
-
-   if (numChannels == 2) {
-      channels[0]->SetLinked(true);
-   }
-
-   sampleCount maxBlockSize = channels[0]->GetMaxBlockSize();
+   TrackHolders channels;
    int updateResult = eProgressSuccess;
 
-   samplePtr srcbuffer = NewSamples(maxBlockSize * numChannels, format);
-   samplePtr buffer = NewSamples(maxBlockSize, format);
+   {
+      SF_INFO sndInfo;
+      int result;
 
-   sampleCount framescompleted = 0;
+      int numChannels = 0;
 
-   wxString msg;
-
-   msg.Printf(_("Importing %s"), wxFileName::FileName(fileName).GetFullName().c_str());
-
-   /* i18n-hint: 'Raw' means 'unprocessed' here and should usually be tanslated.*/
-   ProgressDialog progress(_("Import Raw"), msg);
-
-   long block;
-   do {
-      block = maxBlockSize;
-
-      if (block + framescompleted > totalFrames)
-         block = totalFrames - framescompleted;
-
-      if (format == int16Sample)
-         block = sf_readf_short(sndFile, (short *)srcbuffer, block);
-      else
-         block = sf_readf_float(sndFile, (float *)srcbuffer, block);
-
-      if (block) {
-         for(c=0; c<numChannels; c++) {
-            if (format==int16Sample) {
-               for(int j=0; j<block; j++)
-                  ((short *)buffer)[j] =
-                     ((short *)srcbuffer)[numChannels*j+c];
-            }
-            else {
-               for(int j=0; j<block; j++)
-                  ((float *)buffer)[j] =
-                     ((float *)srcbuffer)[numChannels*j+c];
-            }
-
-            channels[c]->Append(buffer, format, block);
-         }
-         framescompleted += block;
+      try {
+         // Yes, FormatClassifier currently handles filenames in UTF8 format only, that's
+         // a TODO ...
+         FormatClassifier theClassifier(fileName.utf8_str());
+         encoding = theClassifier.GetResultFormatLibSndfile();
+         numChannels = theClassifier.GetResultChannels();
+         offset = 0;
+      } catch (...) {
+         // Something went wrong in FormatClassifier, use defaults instead.
+         encoding = 0;
       }
 
-      updateResult = progress.Update((wxULongLong_t)framescompleted,
-                                   (wxULongLong_t)totalFrames);
-      if (updateResult != eProgressSuccess)
-         break;
+      if (encoding <= 0) {
+         // Unable to guess.  Use mono, 16-bit samples with CPU endianness
+         // as the default.
+         encoding = SF_FORMAT_RAW | SF_ENDIAN_CPU | SF_FORMAT_PCM_16;
+         numChannels = 1;
+         offset = 0;
+      }
 
-   } while (block > 0 && framescompleted < totalFrames);
+      ImportRawDialog dlog(parent, encoding, numChannels, (int)offset, rate);
+      dlog.ShowModal();
+      if (!dlog.GetReturnCode())
+         return;
 
-   sf_close(sndFile);
+      encoding = dlog.mEncoding;
+      numChannels = dlog.mChannels;
+      rate = dlog.mRate;
+      offset = (sf_count_t)dlog.mOffset;
+      percent = dlog.mPercent;
 
-   int res = updateResult;
-   if (block < 0)
-     res = eProgressFailed;
+      memset(&sndInfo, 0, sizeof(SF_INFO));
+      sndInfo.samplerate = (int)rate;
+      sndInfo.channels = (int)numChannels;
+      sndInfo.format = encoding | SF_FORMAT_RAW;
 
-   if (res == eProgressFailed || res == eProgressCancelled) {
-      for (c = 0; c < numChannels; c++)
-         delete channels[c];
-      delete[] channels;
+      wxFile f;   // will be closed when it goes out of scope
+      SFFile sndFile;
 
-      // It's a shame we can't return proper error code
-      return 0;
+      if (f.Open(fileName)) {
+         // Even though there is an sf_open() that takes a filename, use the one that
+         // takes a file descriptor since wxWidgets can open a file with a Unicode name and
+         // libsndfile can't (under Windows).
+         sndFile.reset(SFCall<SNDFILE*>(sf_open_fd, f.fd(), SFM_READ, &sndInfo, FALSE));
+      }
+
+      if (!sndFile){
+         // TODO: Handle error
+         char str[1000];
+         sf_error_str((SNDFILE *)NULL, str, 1000);
+         printf("%s\n", str);
+
+         return;
+      }
+
+      result = sf_command(sndFile.get(), SFC_SET_RAW_START_OFFSET, &offset, sizeof(offset));
+      if (result != 0) {
+         char str[1000];
+         sf_error_str(sndFile.get(), str, 1000);
+         printf("%s\n", str);
+      }
+
+      SFCall<sf_count_t>(sf_seek, sndFile.get(), 0, SEEK_SET);
+
+      auto totalFrames = (sampleCount)(sndInfo.frames * percent / 100.0);
+
+      //
+      // Sample format:
+      //
+      // In general, go with the user's preferences.  However, if
+      // the file is higher-quality, go with a format which preserves
+      // the quality of the original file.
+      //
+
+      format = (sampleFormat)
+      gPrefs->Read(wxT("/SamplingRate/DefaultProjectSampleFormat"), floatSample);
+
+      if (format != floatSample &&
+          sf_subtype_more_than_16_bits(encoding))
+         format = floatSample;
+
+      channels.resize(numChannels);
+
+      auto iter = channels.begin();
+      for (int c = 0; c < numChannels; ++iter, ++c) {
+         const auto channel =
+         (*iter = trackFactory->NewWaveTrack(format, rate)).get();
+
+         if (numChannels > 1)
+            switch (c) {
+               case 0:
+                  channel->SetChannel(Track::LeftChannel);
+                  break;
+               case 1:
+                  channel->SetChannel(Track::RightChannel);
+                  break;
+               default:
+                  channel->SetChannel(Track::MonoChannel);
+            }
+      }
+
+      const auto firstChannel = channels.begin()->get();
+      if (numChannels == 2) {
+         firstChannel->SetLinked(true);
+      }
+
+      auto maxBlockSize = firstChannel->GetMaxBlockSize();
+
+      SampleBuffer srcbuffer(maxBlockSize * numChannels, format);
+      SampleBuffer buffer(maxBlockSize, format);
+
+      decltype(totalFrames) framescompleted = 0;
+      if (totalFrames < 0) {
+         wxASSERT(false);
+         totalFrames = 0;
+      }
+
+      wxString msg;
+
+      msg.Printf(_("Importing %s"), wxFileName::FileName(fileName).GetFullName().c_str());
+
+      /* i18n-hint: 'Raw' means 'unprocessed' here and should usually be tanslated.*/
+      ProgressDialog progress(_("Import Raw"), msg);
+
+      size_t block;
+      do {
+         block =
+            limitSampleBufferSize( maxBlockSize, totalFrames - framescompleted );
+
+         sf_count_t result;
+         if (format == int16Sample)
+            result = SFCall<sf_count_t>(sf_readf_short, sndFile.get(), (short *)srcbuffer.ptr(), block);
+         else
+            result = SFCall<sf_count_t>(sf_readf_float, sndFile.get(), (float *)srcbuffer.ptr(), block);
+
+         if (result >= 0) {
+            block = result;
+         }
+         else {
+            // This is not supposed to happen, sndfile.h says result is always
+            // a count, not an invalid value for error
+            wxASSERT(false);
+            updateResult = eProgressFailed;
+            break;
+         }
+
+         if (block) {
+            auto iter = channels.begin();
+            for(int c=0; c<numChannels; ++iter, ++c) {
+               if (format==int16Sample) {
+                  for(decltype(block) j=0; j<block; j++)
+                     ((short *)buffer.ptr())[j] =
+                     ((short *)srcbuffer.ptr())[numChannels*j+c];
+               }
+               else {
+                  for(decltype(block) j=0; j<block; j++)
+                     ((float *)buffer.ptr())[j] =
+                     ((float *)srcbuffer.ptr())[numChannels*j+c];
+               }
+               
+               iter->get()->Append(buffer.ptr(), format, block);
+            }
+            framescompleted += block;
+         }
+         
+         updateResult = progress.Update((wxULongLong_t)framescompleted,
+                                        (wxULongLong_t)totalFrames);
+         if (updateResult != eProgressSuccess)
+            break;
+         
+      } while (block > 0 && framescompleted < totalFrames);
    }
 
-   for (c = 0; c < numChannels; c++)
-      channels[c]->Flush();
-   *outTracks = (Track **)channels;
+   if (updateResult == eProgressFailed || updateResult == eProgressCancelled) {
+      // It's a shame we can't return proper error code
+      return;
+   }
 
-   return numChannels;
+   for (const auto &channel : channels)
+      channel->Flush();
+   outTracks.swap(channels);
 }
 
 //
@@ -293,7 +303,7 @@ enum {
    PlayID
 };
 
-BEGIN_EVENT_TABLE(ImportRawDialog, wxDialog)
+BEGIN_EVENT_TABLE(ImportRawDialog, wxDialogWrapper)
    EVT_BUTTON(wxID_OK, ImportRawDialog::OnOK)
    EVT_BUTTON(wxID_CANCEL, ImportRawDialog::OnCancel)
    EVT_BUTTON(PlayID, ImportRawDialog::OnPlay)
@@ -303,7 +313,7 @@ END_EVENT_TABLE()
 ImportRawDialog::ImportRawDialog(wxWindow * parent,
                                  int encoding, int channels,
                                  int offset, double rate)
-:  wxDialog(parent, wxID_ANY, _("Import Raw Data"),
+:  wxDialogWrapper(parent, wxID_ANY, _("Import Raw Data"),
             wxDefaultPosition, wxDefaultSize,
             wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER),
     mEncoding(encoding),
@@ -311,6 +321,8 @@ ImportRawDialog::ImportRawDialog(wxWindow * parent,
     mOffset(offset),
     mRate(rate)
 {
+   SetName(GetTitle());
+
    ShuttleGui S(this, eIsCreating);
    wxArrayString encodings;
    wxArrayString endians;

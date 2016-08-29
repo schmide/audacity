@@ -11,6 +11,7 @@
 #ifndef __AUDACITY_MIXER_TOOLBAR__
 #define __AUDACITY_MIXER_TOOLBAR__
 
+#include "../MemoryX.h"
 #include "ToolBar.h"
 
 class wxImage;
@@ -21,7 +22,7 @@ class wxStaticBitmap;
 
 class ASlider;
 
-class MixerToolBar:public ToolBar {
+class MixerToolBar final : public ToolBar {
 
  public:
 
@@ -30,14 +31,13 @@ class MixerToolBar:public ToolBar {
 
    void Create(wxWindow * parent);
 
-   void RecreateTipWindows();
    void UpdatePrefs();
    void UpdateControls();
    void SetMixer(wxCommandEvent &event);
 
-   virtual void Populate();
-   virtual void Repaint(wxDC * WXUNUSED(dc)) {};
-   virtual void EnableDisableButtons() {};
+   void Populate() override;
+   void Repaint(wxDC * WXUNUSED(dc)) override {};
+   void EnableDisableButtons() override {};
 
    void OnFocus(wxFocusEvent &event);
    void OnCaptureKey(wxCommandEvent &event);
@@ -50,6 +50,8 @@ class MixerToolBar:public ToolBar {
    void AdjustOutputGain(int adj);
    void AdjustInputGain(int adj);
 
+   void RegenerateTooltips() override {};
+
  protected:
    float mInputSliderVolume;
    float mOutputSliderVolume;
@@ -59,8 +61,7 @@ class MixerToolBar:public ToolBar {
    void InitializeMixerToolBar();
    void SetToolTips();
 
-   wxBitmap *mPlayBitmap;
-   wxBitmap *mRecordBitmap;
+   std::unique_ptr<wxBitmap> mPlayBitmap, mRecordBitmap;
 
    ASlider *mInputSlider;
    ASlider *mOutputSlider;

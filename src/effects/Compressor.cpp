@@ -25,20 +25,23 @@
 *//*******************************************************************/
 
 #include "../Audacity.h"
+#include "Compressor.h"
 
 #include <math.h>
 
 #include <wx/brush.h>
+#include <wx/dcclient.h>
 #include <wx/dcmemory.h>
 #include <wx/intl.h>
 #include <wx/msgdlg.h>
 
 #include "../AColor.h"
 #include "../Prefs.h"
+#include "../ShuttleGui.h"
 #include "../float_cast.h"
 #include "../widgets/Ruler.h"
 
-#include "Compressor.h"
+#include "../WaveTrack.h"
 
 enum
 {
@@ -54,7 +57,7 @@ enum
 //     Name          Type     Key                  Def      Min      Max      Scale
 Param( Threshold,    double,  XO("Threshold"),     -12.0,   -60.0,   -1.0,    1   );
 Param( NoiseFloor,   double,  XO("NoiseFloor"),    -40.0,   -80.0,   -20.0,   5   );
-Param( Ratio,        double,  XO("Ratio"),         2.0,     1.5,     10.0,    2   );
+Param( Ratio,        double,  XO("Ratio"),         2.0,     1.1,     10.0,    10  );
 Param( AttackTime,   double,  XO("AttackTime"),    0.2,     0.1,     5.0,     100 );
 Param( ReleaseTime,  double,  XO("ReleaseTime"),   1.0,     1.0,     30.0,    10  );
 Param( Normalize,    bool,    XO("Normalize"),     true,    false,   true,    1   );
@@ -85,6 +88,8 @@ EffectCompressor::EffectCompressor()
    mFollow1 = NULL;
    mFollow2 = NULL;
    mFollowLen = 0;
+
+   SetLinearEffectFlag(false);
 }
 
 EffectCompressor::~EffectCompressor()
@@ -200,7 +205,7 @@ void EffectCompressor::PopulateOrExchange(ShuttleGui & S)
    S.StartHorizontalLay(wxEXPAND, true);
    {
       S.SetBorder(10);
-      mPanel = new EffectCompressorPanel(S.GetParent(),
+      mPanel = safenew EffectCompressorPanel(S.GetParent(),
                                          mThresholdDB,
                                          mNoiseFloorDB,
                                          mRatio);
@@ -212,7 +217,7 @@ void EffectCompressor::PopulateOrExchange(ShuttleGui & S)
 
    S.StartStatic(wxT(""));
    {
-      S.StartMultiColumn(3, wxEXPAND | wxALIGN_CENTER_VERTICAL);
+      S.StartMultiColumn(3, wxEXPAND);
       {
          S.SetStretchyCol(1);
          mThresholdLabel = S.AddVariableText(_("Threshold:"), true,
@@ -245,6 +250,7 @@ void EffectCompressor::PopulateOrExchange(ShuttleGui & S)
                                                  MAX_Ratio * SCL_Ratio,
                                                  MIN_Ratio * SCL_Ratio);
          mRatioSlider->SetName(_("Ratio"));
+         mRatioSlider->SetPageSize(5);
          mRatioText = S.AddVariableText(wxT("XXXX:1"), true,
                                              wxALIGN_LEFT | wxALIGN_CENTER_VERTICAL);
 
@@ -325,8 +331,8 @@ bool EffectCompressor::TransferDataFromWindow()
 
 bool EffectCompressor::NewTrackPass1()
 {
-   mThreshold = pow(10.0, mThresholdDB/20); // factor of 20 because it's power
-   mNoiseFloor = pow(10.0, mNoiseFloorDB/20);
+   mThreshold = DB_TO_LINEAR(mThresholdDB);
+   mNoiseFloor = DB_TO_LINEAR(mNoiseFloorDB);
    mNoiseCounter = 100;
 
    mAttackInverseFactor = exp(log(mThreshold) / (mCurRate * mAttackTime + 0.5));
@@ -360,11 +366,11 @@ bool EffectCompressor::InitPass1()
       DisableSecondPass();
 
    // Find the maximum block length required for any track
-   sampleCount maxlen=0;
+   size_t maxlen = 0;
    SelectedTrackListOfKindIterator iter(Track::Wave, mTracks);
    WaveTrack *track = (WaveTrack *) iter.First();
    while (track) {
-      sampleCount len=track->GetMaxBlockSize();
+      auto len = track->GetMaxBlockSize();
       if(len > maxlen)
          maxlen = len;
       //Iterate to the next track
@@ -504,9 +510,9 @@ void EffectCompressor::Follow(float *buffer, float *env, int len, float *previou
     rise_factor, then we compute a rising envelope that meets
     the input value by working bacwards in time, changing the
     previous values to input / rise_factor, input / rise_factor^2,
-    input / rise_factor^3, etc. until this new envelope intersects
+    input / rise_factor^3, etc. until this NEW envelope intersects
     the previously computed values. There is only a limited buffer
-    in which we can work backwards, so if the new envelope does not
+    in which we can work backwards, so if the NEW envelope does not
     intersect the old one, then make yet another pass, this time
     from the oldest buffered value forward, increasing on each
     sample by rise_factor to produce a maximal envelope. This will
@@ -628,7 +634,7 @@ void EffectCompressor::UpdateUI()
    mNoiseFloorText->SetLabel(wxString::Format(_("%3d dB"), (int) mNoiseFloorDB));
    mNoiseFloorText->SetName(mNoiseFloorText->GetLabel()); // fix for bug 577 (NVDA/Narrator screen readers do not read static text in dialogs)
 
-   if (mRatioSlider->GetValue() % 2 == 0) {
+   if (mRatioSlider->GetValue() % 10 == 0) {
       mRatioLabel->SetName(wxString::Format(_("Ratio %.0f to 1"), mRatio));
       /* i18n-hint: Unless your language has a different convention for ratios,
        * like 8:1, leave as is.*/
@@ -659,7 +665,7 @@ void EffectCompressor::UpdateUI()
 // EffectCompressorPanel
 //----------------------------------------------------------------------------
 
-BEGIN_EVENT_TABLE(EffectCompressorPanel, wxPanel)
+BEGIN_EVENT_TABLE(EffectCompressorPanel, wxPanelWrapper)
    EVT_PAINT(EffectCompressorPanel::OnPaint)
    EVT_SIZE(EffectCompressorPanel::OnSize)
 END_EVENT_TABLE()
@@ -668,14 +674,11 @@ EffectCompressorPanel::EffectCompressorPanel(wxWindow *parent,
                                              double & threshold,
                                              double & noiseFloor,
                                              double & ratio)
-:  wxPanel(parent),
+:  wxPanelWrapper(parent),
    threshold(threshold),
    noiseFloor(noiseFloor),
    ratio(ratio)
 {
-   mBitmap = NULL;
-   mWidth = 0;
-   mHeight = 0;
 }
 
 void EffectCompressorPanel::OnPaint(wxPaintEvent & WXUNUSED(evt))
@@ -685,15 +688,6 @@ void EffectCompressorPanel::OnPaint(wxPaintEvent & WXUNUSED(evt))
    int width, height;
    GetSize(&width, &height);
 
-   if (!mBitmap || mWidth!=width || mHeight!=height) {
-      if (mBitmap)
-         delete mBitmap;
-
-      mWidth = width;
-      mHeight = height;
-      mBitmap = new wxBitmap(mWidth, mHeight);
-   }
-
    double rangeDB = 60;
 
    // Ruler
@@ -701,7 +695,7 @@ void EffectCompressorPanel::OnPaint(wxPaintEvent & WXUNUSED(evt))
    int h = 0;
 
    Ruler vRuler;
-   vRuler.SetBounds(0, 0, mWidth, mHeight);
+   vRuler.SetBounds(0, 0, width, height);
    vRuler.SetOrientation(wxVERTICAL);
    vRuler.SetRange(0, -rangeDB);
    vRuler.SetFormat(Ruler::LinearDBFormat);
@@ -709,7 +703,7 @@ void EffectCompressorPanel::OnPaint(wxPaintEvent & WXUNUSED(evt))
    vRuler.GetMaxSize(&w, NULL);
 
    Ruler hRuler;
-   hRuler.SetBounds(0, 0, mWidth, mHeight);
+   hRuler.SetBounds(0, 0, width, height);
    hRuler.SetOrientation(wxHORIZONTAL);
    hRuler.SetRange(-rangeDB, 0);
    hRuler.SetFormat(Ruler::LinearDBFormat);
@@ -717,84 +711,65 @@ void EffectCompressorPanel::OnPaint(wxPaintEvent & WXUNUSED(evt))
    hRuler.SetFlip(true);
    hRuler.GetMaxSize(NULL, &h);
 
-   vRuler.SetBounds(0, 0, w, mHeight - h);
-   hRuler.SetBounds(w, mHeight - h, mWidth, mHeight);
+   vRuler.SetBounds(0, 0, w, height - h);
+   hRuler.SetBounds(w, height - h, width, height);
 
-   wxColour bkgnd = GetBackgroundColour();
-   wxBrush bkgndBrush(bkgnd, wxSOLID);
-
-   wxMemoryDC memDC;
-   memDC.SelectObject(*mBitmap);
-
-   wxRect bkgndRect;
-   bkgndRect.x = 0;
-   bkgndRect.y = 0;
-   bkgndRect.width = w;
-   bkgndRect.height = mHeight;
-   memDC.SetBrush(bkgndBrush);
-   memDC.SetPen(*wxTRANSPARENT_PEN);
-   memDC.DrawRectangle(bkgndRect);
-
-   bkgndRect.y = mHeight - h;
-   bkgndRect.width = mWidth;
-   bkgndRect.height = h;
-   memDC.DrawRectangle(bkgndRect);
+#if defined(__WXMSW__)
+   dc.Clear();
+#endif
 
    wxRect border;
    border.x = w;
    border.y = 0;
-   border.width = mWidth - w;
-   border.height = mHeight - h + 1;
+   border.width = width - w;
+   border.height = height - h + 1;
 
-   memDC.SetBrush(*wxWHITE_BRUSH);
-   memDC.SetPen(*wxBLACK_PEN);
-   memDC.DrawRectangle(border);
+   dc.SetBrush(*wxWHITE_BRUSH);
+   dc.SetPen(*wxBLACK_PEN);
+   dc.DrawRectangle(border);
 
-   mEnvRect = border;
-   mEnvRect.Deflate( 2, 2 );
+   wxRect envRect = border;
+   envRect.Deflate( 2, 2 );
 
-   int kneeX = lrint((rangeDB+threshold)*mEnvRect.width/rangeDB);
-   int kneeY = lrint((rangeDB+threshold/ratio)*mEnvRect.height/rangeDB);
+   int kneeX = lrint((rangeDB+threshold)*envRect.width/rangeDB);
+   int kneeY = lrint((rangeDB+threshold/ratio)*envRect.height/rangeDB);
 
-   int finalY = mEnvRect.height;
-   int startY = lrint((threshold*(1.0/ratio-1.0))*mEnvRect.height/rangeDB);
+   int finalY = envRect.height;
+   int startY = lrint((threshold*(1.0/ratio-1.0))*envRect.height/rangeDB);
 
    // Yellow line for threshold
-/*   memDC.SetPen(wxPen(wxColour(220, 220, 0), 1, wxSOLID));
-   AColor::Line(memDC,
-                mEnvRect.x,
-                mEnvRect.y + mEnvRect.height - kneeY,
-                mEnvRect.x + mEnvRect.width - 1,
-                mEnvRect.y + mEnvRect.height - kneeY);*/
+/*   dc.SetPen(wxPen(wxColour(220, 220, 0), 1, wxSOLID));
+   AColor::Line(dc,
+                envRect.x,
+                envRect.y + envRect.height - kneeY,
+                envRect.x + envRect.width - 1,
+                envRect.y + envRect.height - kneeY);*/
 
    // Was: Nice dark red line for the compression diagram
-//   memDC.SetPen(wxPen(wxColour(180, 40, 40), 3, wxSOLID));
+//   dc.SetPen(wxPen(wxColour(180, 40, 40), 3, wxSOLID));
 
    // Nice blue line for compressor, same color as used in the waveform envelope.
-   memDC.SetPen( AColor::WideEnvelopePen) ;
+   dc.SetPen( AColor::WideEnvelopePen) ;
 
-   AColor::Line(memDC,
-                mEnvRect.x,
-                mEnvRect.y + mEnvRect.height - startY,
-                mEnvRect.x + kneeX - 1,
-                mEnvRect.y + mEnvRect.height - kneeY);
+   AColor::Line(dc,
+                envRect.x,
+                envRect.y + envRect.height - startY,
+                envRect.x + kneeX - 1,
+                envRect.y + envRect.height - kneeY);
 
-   AColor::Line(memDC,
-                mEnvRect.x + kneeX,
-                mEnvRect.y + mEnvRect.height - kneeY,
-                mEnvRect.x + mEnvRect.width - 1,
-                mEnvRect.y + mEnvRect.height - finalY);
+   AColor::Line(dc,
+                envRect.x + kneeX,
+                envRect.y + envRect.height - kneeY,
+                envRect.x + envRect.width - 1,
+                envRect.y + envRect.height - finalY);
 
    // Paint border again
-   memDC.SetBrush(*wxTRANSPARENT_BRUSH);
-   memDC.SetPen(*wxBLACK_PEN);
-   memDC.DrawRectangle(border);
+   dc.SetBrush(*wxTRANSPARENT_BRUSH);
+   dc.SetPen(*wxBLACK_PEN);
+   dc.DrawRectangle(border);
 
-   vRuler.Draw(memDC);
-   hRuler.Draw(memDC);
-
-   dc.Blit(0, 0, mWidth, mHeight,
-           &memDC, 0, 0, wxCOPY, FALSE);
+   vRuler.Draw(dc);
+   hRuler.Draw(dc);
 }
 
 void EffectCompressorPanel::OnSize(wxSizeEvent & WXUNUSED(evt))

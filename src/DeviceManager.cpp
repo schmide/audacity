@@ -37,18 +37,14 @@
 #include "DeviceManager.h"
 #include "toolbars/DeviceToolBar.h"
 
+#include "Experimental.h"
+
 DeviceManager DeviceManager::dm;
 
 /// Gets the singleton instance
 DeviceManager* DeviceManager::Instance()
 {
    return &dm;
-}
-
-/// Releases memory assosiated with the singleton
-void DeviceManager::Destroy()
-{
-
 }
 
 const std::vector<DeviceSourceMap> &DeviceManager::GetInputDeviceMaps()
@@ -177,7 +173,7 @@ static void AddSourcesFromStream(int deviceIndex, const PaDeviceInfo *info, std:
 static bool IsInputDeviceAMapperDevice(const PaDeviceInfo *info)
 {
    // For Windows only, portaudio returns the default mapper object
-   // as the first index after a new hostApi index is detected (true for MME and DS)
+   // as the first index after a NEW hostApi index is detected (true for MME and DS)
    // this is a bit of a hack, but there's no other way to find out which device is a mapper,
    // I've looked at string comparisons, but if the system is in a different language this breaks.
 #ifdef __WXMSW__
@@ -250,7 +246,7 @@ static void AddSources(int deviceIndex, int rate, std::vector<DeviceSourceMap> *
 }
 
 
-/// Gets a new list of devices by terminating and restarting portaudio
+/// Gets a NEW list of devices by terminating and restarting portaudio
 /// Assumes that DeviceManager is only used on the main thread.
 void DeviceManager::Rescan()
 {
@@ -258,7 +254,7 @@ void DeviceManager::Rescan()
    this->mInputDeviceSourceMaps.clear();
    this->mOutputDeviceSourceMaps.clear();
 
-   // if we are doing a second scan then restart portaudio to get new devices
+   // if we are doing a second scan then restart portaudio to get NEW devices
    if (m_inited) {
       // check to see if there is a stream open - can happen if monitoring,
       // but otherwise Rescan() should not be available to the user.
@@ -272,10 +268,12 @@ void DeviceManager::Rescan()
       }
 
       // restart portaudio - this updates the device list
+      // FIXME: TRAP_ERR restarting PortAudio
       Pa_Terminate();
       Pa_Initialize();
    }
 
+   // FIXME: TRAP_ERR PaErrorCode not handled in ReScan()
    int nDevices = Pa_GetDeviceCount();
 
    //The heirarchy for devices is Host/device/source.
@@ -302,7 +300,7 @@ void DeviceManager::Rescan()
    // Hosts may have disappeared or appeared so a complete repopulate is needed.
    if (m_inited) {
       DeviceToolBar *dt;
-      for (size_t i = 0; i < gAudacityProjects.GetCount(); i++) {
+      for (size_t i = 0; i < gAudacityProjects.size(); i++) {
          dt = gAudacityProjects[i]->GetDeviceToolBar();
          dt->RefillCombos();
       }

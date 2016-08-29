@@ -18,16 +18,16 @@
 #include <wx/stattext.h>
 #include <wx/window.h>
 
-#include "../ShuttleGui.h"
-
 #include "PrefsPanel.h"
 
-class LibraryPrefs:public PrefsPanel
+class ShuttleGui;
+
+class LibraryPrefs final : public PrefsPanel
 {
  public:
    LibraryPrefs(wxWindow * parent);
    ~LibraryPrefs();
-   virtual bool Apply();
+   bool Apply() override;
 
  private:
    void Populate();
@@ -46,4 +46,9 @@ class LibraryPrefs:public PrefsPanel
    DECLARE_EVENT_TABLE();
 };
 
+class LibraryPrefsFactory final : public PrefsPanelFactory
+{
+public:
+   PrefsPanel *Create(wxWindow *parent) override;
+};
 #endif

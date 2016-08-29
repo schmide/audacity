@@ -15,6 +15,7 @@
 
 
 #include "Audacity.h"
+#include "Printing.h"
 
 #include <wx/defs.h>
 #include <wx/dc.h>
@@ -24,18 +25,21 @@
 #include <wx/printdlg.h>
 
 #include "AColor.h"
-#include "Track.h"
 #include "TrackArtist.h"
 #include "ViewInfo.h"
 #include "WaveTrack.h"
 #include "widgets/Ruler.h"
-#include "Printing.h"
+
+#include "Experimental.h"
 
 // Globals, so that we remember settings from session to session
-static wxPrintData *gPrintData = NULL;
-static wxPageSetupData *gPageSetupData = NULL;
+wxPrintData &gPrintData()
+{
+   static wxPrintData theData;
+   return theData;
+}
 
-class AudacityPrintout : public wxPrintout
+class AudacityPrintout final : public wxPrintout
 {
  public:
    AudacityPrintout(wxString title,
@@ -80,13 +84,8 @@ bool AudacityPrintout::OnPrintPage(int WXUNUSED(page))
    TrackArtist artist;
    artist.SetBackgroundBrushes(*wxWHITE_BRUSH, *wxWHITE_BRUSH,
                                *wxWHITE_PEN, *wxWHITE_PEN);
-   ViewInfo viewInfo;
-   viewInfo.selectedRegion = SelectedRegion();
-   viewInfo.vpos = 0;
-   viewInfo.h = 0.0;
-   viewInfo.screen = mTracks->GetEndTime() - viewInfo.h;
-   viewInfo.total = viewInfo.screen;
-   viewInfo.zoom = viewInfo.lastZoom = width / viewInfo.screen;
+   const double screenDuration = mTracks->GetEndTime();
+   ZoomInfo zoomInfo(0.0, width / screenDuration);
    int y = rulerPageHeight;
 
    TrackListIterator iter(mTracks);
@@ -98,7 +97,7 @@ bool AudacityPrintout::OnPrintPage(int WXUNUSED(page))
       r.width = width;
       r.height = (int)(n->GetHeight() * scale);
 
-      artist.DrawTrack(n, *dc, r, &viewInfo, false, false, false, false);
+      artist.DrawTrack(n, *dc, r, SelectedRegion(), zoomInfo, false, false, false, false);
 
       dc->SetPen(*wxBLACK_PEN);
       AColor::Line(*dc, 0, r.y, width, r.y);
@@ -143,28 +142,17 @@ void AudacityPrintout::GetPageInfo(int *minPage, int *maxPage,
 
 void HandlePageSetup(wxWindow *parent)
 {
-   if (gPageSetupData == NULL)
-      gPageSetupData = new wxPageSetupDialogData();
-   if (gPrintData == NULL)
-      gPrintData = new wxPrintData();
+   wxPageSetupData pageSetupData;
 
-   (*gPageSetupData) = *gPrintData;
-
-   wxPageSetupDialog pageSetupDialog(parent, gPageSetupData);
+   wxPageSetupDialog pageSetupDialog(parent, &pageSetupData);
    pageSetupDialog.ShowModal();
 
-   (*gPrintData) = pageSetupDialog.GetPageSetupData().GetPrintData();
-   (*gPageSetupData) = pageSetupDialog.GetPageSetupData();
+   gPrintData() = pageSetupDialog.GetPageSetupData().GetPrintData();
 }
 
-void HandlePrint(wxWindow *parent, wxString name, TrackList *tracks)
+void HandlePrint(wxWindow *parent, const wxString &name, TrackList *tracks)
 {
-   if (gPageSetupData == NULL)
-      gPageSetupData = new wxPageSetupDialogData();
-   if (gPrintData == NULL)
-      gPrintData = new wxPrintData();
-
-   wxPrintDialogData printDialogData(*gPrintData);
+   wxPrintDialogData printDialogData(gPrintData());
 
    wxPrinter printer(&printDialogData);
    AudacityPrintout printout(name, tracks);
@@ -178,6 +166,6 @@ void HandlePrint(wxWindow *parent, wxString name, TrackList *tracks)
       }
    }
    else {
-      *gPrintData = printer.GetPrintDialogData().GetPrintData();
+      gPrintData() = printer.GetPrintDialogData().GetPrintData();
    }
 }

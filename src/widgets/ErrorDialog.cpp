@@ -40,7 +40,7 @@ Gives an Error message with an option for help.
 #include "ErrorDialog.h"
 
 // special case for alias missing dialog because we keep track of if it exists.
-class AliasedFileMissingDialog : public ErrorDialog
+class AliasedFileMissingDialog final : public ErrorDialog
 {
    public:
    AliasedFileMissingDialog(AudacityProject *parent,
@@ -51,7 +51,7 @@ class AliasedFileMissingDialog : public ErrorDialog
    virtual ~AliasedFileMissingDialog();
 };
 
-BEGIN_EVENT_TABLE(ErrorDialog, wxDialog)
+BEGIN_EVENT_TABLE(ErrorDialog, wxDialogWrapper)
    EVT_BUTTON( wxID_OK, ErrorDialog::OnOk)
    EVT_BUTTON( wxID_HELP, ErrorDialog::OnHelp)
 END_EVENT_TABLE()
@@ -78,8 +78,10 @@ ErrorDialog::ErrorDialog(
    const wxString & message,
    const wxString & helpURL,
    const bool Close, const bool modal):
-   wxDialog(parent, (wxWindowID)-1, dlogTitle)
+   wxDialogWrapper(parent, (wxWindowID)-1, dlogTitle)
 {
+   SetName(GetTitle());
+
    long buttonMask;
 
    // only add the help button if we have a URL
@@ -100,35 +102,40 @@ ErrorDialog::ErrorDialog(
    S.EndVerticalLay();
 
    Layout();
-   Fit();
+   GetSizer()->Fit(this);
    SetMinSize(GetSize());
    Center();
 
 #if 0
    // Original non ShuttleGui based code.
    // Layout did not look good on Windows.
-   wxBoxSizer *mainSizer = new wxBoxSizer(wxVERTICAL);
-   wxBoxSizer *vSizer = new wxBoxSizer(wxVERTICAL);
+   wxBoxSizer mainSizer;
+   {
+      auto uMainSizer = std::make_unique<wxBoxSizer>(wxVERTICAL);
+      mainSizer = uMainSizer.get();
+      auto vSizer = make_unique<xBoxSizer>(wxVERTICAL);
 
-   wxBoxSizer *hSizer = new wxBoxSizer(wxHORIZONTAL);
+      auto hSizer = make_unique<wxBoxSizer>(wxHORIZONTAL);
 
-   wxStaticText *statText = new wxStaticText(this, -1, message);
-   mainSizer->Add(statText, 0, wxALIGN_LEFT|wxALL, 5);
+      wxStaticText *statText = safenew wxStaticText(this, -1, message);
+      mainSizer->Add(statText, 0, wxALIGN_LEFT|wxALL, 5);
 
-   wxButton *help = new wxButton(this, wxID_HELP, _("Help"));
-   hSizer->Add(help, 0, wxALIGN_LEFT|wxALL, 5);
+      wxButton *help = safenew wxButton(this, wxID_HELP, _("Help"));
+      hSizer->Add(help, 0, wxALIGN_LEFT|wxALL, 5);
 
-   wxButton *ok = new wxButton(this, wxID_OK, _("OK"));
-   ok->SetDefault();
-   ok->SetFocus();
-   hSizer->Add(ok, 0, wxALIGN_RIGHT|wxALL, 5);
+      wxButton *ok = safenew wxButton(this, wxID_OK, _("OK"));
+      ok->SetDefault();
+      ok->SetFocus();
+      hSizer->Add(ok, 0, wxALIGN_RIGHT|wxALL, 5);
 
-   vSizer->Add(hSizer, 0, wxALIGN_CENTER|wxALL, 5);
+      vSizer->Add(hSizer.release(), 0, wxALIGN_CENTER|wxALL, 5);
 
-   mainSizer->Add(vSizer, 0, wxALL, 15 );
+      mainSizer->Add(vSizer.release(), 0, wxALL, 15 );
 
-   SetAutoLayout(true);
-   SetSizer(mainSizer);
+      SetAutoLayout(true);
+      SetSizer(uMainSizer.release());
+   }
+
    mainSizer->Fit(this);
    mainSizer->SetSizeHints(this);
 #endif
@@ -177,11 +184,14 @@ void ShowModelessErrorDialog(wxWindow *parent,
                              const wxString &helpURL,
                              const bool Close)
 {
-   ErrorDialog *dlog = new ErrorDialog(parent, dlogTitle, message, helpURL, Close, false);
+   wxASSERT(parent);
+   ErrorDialog *dlog = safenew ErrorDialog(parent, dlogTitle, message, helpURL, Close, false);
    dlog->CentreOnParent();
    dlog->Show();
    // ANSWER-ME: Vigilant Sentry flags this method as not deleting dlog, so a mem leak.
    // ANSWER-ME: This is unused. Delete it or are there plans for it?
+   // PRL: answer is that the parent window guarantees destruction of the dialog
+   // but in practice Destroy() in OnOK does that
 }
 
 void ShowAliasMissingDialog(AudacityProject *parent,
@@ -190,7 +200,8 @@ void ShowAliasMissingDialog(AudacityProject *parent,
                             const wxString &helpURL,
                             const bool Close)
 {
-   ErrorDialog *dlog = new AliasedFileMissingDialog(parent, dlogTitle, message, helpURL, Close, false);
+   wxASSERT(parent); // to justify safenew
+   ErrorDialog *dlog = safenew AliasedFileMissingDialog(parent, dlogTitle, message, helpURL, Close, false);
    // Don't center because in many cases (effect, export, etc) there will be a progress bar in the center that blocks this.
    // instead put it just above or on the top of the project.
    wxPoint point;
@@ -207,4 +218,6 @@ void ShowAliasMissingDialog(AudacityProject *parent,
    // stop playback AND read dialog's instructions.
    dlog->Show();
    // ANSWER-ME: Vigilant Sentry flags this method as not deleting dlog, so a mem leak.
+   // PRL: answer is that the parent window guarantees destruction of the dialog
+   // but in practice Destroy() in OnOK does that
 }
